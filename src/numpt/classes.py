@@ -499,8 +499,8 @@ class canonic_ops():
         rows, cols, data = [], [], []
         for i in range(1, N_full - 1):
             idx = i - 1  # index in the interior operator
-            h1 = mesh[i] - mesh[i - 1]
-            h2 = mesh[i + 1] - mesh[i]
+            h1 = np.abs(mesh[i] - mesh[i - 1])
+            h2 = np.abs(mesh[i + 1] - mesh[i])
             A = -h2 / (h1 * (h1 + h2))
             B = (h2 - h1) / (h1 * h2)
             C = h1 / (h2 * (h1 + h2))
@@ -554,8 +554,8 @@ class canonic_ops():
         rows, cols, data = [], [], []
         for i in range(1, N_full - 1):
             idx = i - 1
-            h1 = mesh[i] - mesh[i - 1]
-            h2 = mesh[i + 1] - mesh[i]
+            h1 = np.abs(mesh[i] - mesh[i - 1])
+            h2 = np.abs(mesh[i + 1] - mesh[i])
             coeff = 2.0 / (h1 + h2)
             A = coeff / h1
             C = coeff / h2
