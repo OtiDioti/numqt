@@ -1,24 +1,25 @@
-[tool.poetry]
-name = "numpt"
-version = "0.0.1"
-description = "A Python package to perform finite element method simulations of quantum mechanical systems."
-authors = ["Giovanni Francesco Diotallevi"]
-license = "MIT"
-readme = "README.md"
-homepage = "https://github.com/OtiDioti/numpt"
-
-[tool.poetry.dependencies]
-python = ">=3.6"
-numpy = "^1.18"
-scipy = "^1.4"
-matplotlib = "^3.1"
-plotly = "^4.0"
-scikit-image = "^0.16"
-
-[tool.poetry.dev-dependencies]
-pytest = "^5.0"
-
 [build-system]
 requires = ["setuptools", "wheel", "numpy"]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "numpt"  # Replace with your package name
+version = "0.1.0"  # Update as needed
+description = "A Python package for numerical and quantum spin calculations."
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+license = {file = "LICENSE"}
+readme = "README.md"
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["numpt"]
