@@ -19,6 +19,6 @@ scikit-image = "^0.16"
 pytest = "^5.0"
 
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools", "wheel", "numpy"]
+build-backend = "setuptools.build_meta"
 
