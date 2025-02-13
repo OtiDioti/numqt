@@ -717,7 +717,7 @@ class Hamiltonian:
         wavefunctions = [vec.reshape(new_shape) for vec in eigvecs.T]
         
         if self.other_subspaces_dims: # if other_subspaces_dims is NOT None
-            to_be_traced_over = len(other_subspaces_dims)
+            to_be_traced_over = len(self.other_subspaces_dims)
             for _ in range(to_be_traced_over):
                 wavefunctions = [np.sum(vec, axis=0) for vec in wavefunctions] # Tracing over non-orbital degrees of freedom        
             
