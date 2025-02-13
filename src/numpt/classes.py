@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import sparse
 from scipy.sparse import kron
-from utils import iterative_kron
+from .utils import iterative_kron
 from scipy.sparse import diags
 from skimage import measure
 import plotly.graph_objects as go
@@ -752,12 +752,30 @@ class Hamiltonian:
             plt.show()
 
         elif dims == 2:
-            # For 2D, use imshow (or contourf) over the interior grids.
+            # Extract interior grid points
             x = self.mesh.mesh_x[1:-1]
             y = self.mesh.mesh_y[1:-1]
+            
+            # Determine the larger dimension
+            nx, ny = density.shape
+            if nx > ny:
+                # Pad the smaller dimension (y) with zeros
+                pad_size = (nx - ny) // 2
+                density_padded = np.pad(density, ((0, 0), (pad_size, pad_size)), mode="constant")
+                extent = [x[0], x[-1], y[0] - pad_size * (y[1] - y[0]), y[-1] + pad_size * (y[1] - y[0])]
+            elif ny > nx:
+                # Pad the smaller dimension (x) with zeros
+                pad_size = (ny - nx) // 2
+                density_padded = np.pad(density, ((pad_size, pad_size), (0, 0)), mode="constant")
+                extent = [x[0] - pad_size * (x[1] - x[0]), x[-1] + pad_size * (x[1] - x[0]), y[0], y[-1]]
+            else:
+                # Already square
+                density_padded = density
+                extent = [x[0], x[-1], y[0], y[-1]]
+        
+            # Plot heatmap with equal aspect ratio
             plt.figure()
-            plt.imshow(density, extent=[x[0], x[-1], y[0], y[-1]], origin="lower",
-                       aspect="auto", cmap=cmap)
+            plt.imshow(density_padded.T, extent=extent, origin="lower", aspect="equal", cmap=cmap)
             plt.xlabel("x")
             plt.ylabel("y")
             plt.title(f"Wavefunction {wf_index} Probability Density (2D)")

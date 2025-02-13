@@ -1,7 +1,7 @@
 import numpy as np
 from scipy import sparse
 from scipy.sparse import kron
-from utils import iterative_kron
+from .utils import iterative_kron
 
 
 
