@@ -1,6 +1,6 @@
 # Numerical Quantum Theory (numqt)
 
-numqt is a Python package for constructing adaptive, non-uniform meshes and generating quantum mechanical operators on these grids. It also includes routines for creating spin operators (spin‑1/2 and spin‑3/2) that can be embedded in higher-dimensional Hilbert spaces via tensor products. This tool is ideal for researchers and developers working on numerical quantum mechanics, computational physics, and related fields.
+numqt is a Python package for performing finite element simulations of quantum systems. This is achieved via the construction of adaptive, non-uniform meshes and generating quantum mechanical operators on these grids. It also includes routines for creating spin operators (spin‑1/2 and spin‑3/2) that can be embedded in higher-dimensional Hilbert spaces via tensor products. This tool is ideal for researchers and developers working on numerical quantum mechanics, computational physics, and related fields.
 
 ## Table of Contents
 
