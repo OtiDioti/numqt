@@ -649,7 +649,7 @@ class canonic_ops():
 # ----------------------------------------------------------
 
 class Hamiltonian:
-    def __init__(self, H, mesh):
+    def __init__(self, H, mesh, other_subspaces_dims=None):
         """
         Parameters
         ----------
@@ -660,11 +660,17 @@ class Hamiltonian:
             It is assumed that the mesh object also stores the full 1D grids as self.mesh_x, etc.,
             and the number of grid points as self.Nx (and self.Ny, self.Nz where appropriate),
             and that the bounds are unpacked as self.x0, self.x1, etc.
+        other_subspaces : list[int], optional
+            List of integers. Will be used to determine how to reshape the obtained wavefunctions.
         """
         self.H = H
         self.mesh = mesh  # the mesh object containing grid information
         self.energies = None
         self.wavefunctions = None
+        self.other_subspaces_dims = other_subspaces_dims
+        if self.other_subspaces_dims: # if other_subspaces_dims is NOT None
+            if any(not isinstance(dim, int) for dim in self.other_subspaces_dims):
+                raise ValueError("other_subspaces_dims must be a list of integers")
 
     def solve(self, k):
         """
@@ -690,11 +696,20 @@ class Hamiltonian:
         
         # Determine the shape to which each eigenvector must be reshaped.
         if self.mesh.dims == 1:
-            new_shape = (self.mesh.Nx - 2,)
+            if not self.other_subspaces_dims: # if other_subspaces_dims is None
+                new_shape = (self.mesh.Nx - 2,)
+            else:
+                new_shape = tuple(self.other_subspaces_dims) + (self.mesh.Nx - 2,)
         elif self.mesh.dims == 2:
-            new_shape = (self.mesh.Nx - 2, self.mesh.Ny - 2)
+            if not self.other_subspaces_dims: # if other_subspaces_dims is None
+                new_shape = (self.mesh.Nx - 2, self.mesh.Ny - 2)
+            else:
+                 new_shape = tuple(self.other_subspaces_dims) + (self.mesh.Nx - 2, self.mesh.Ny - 2)
         elif self.mesh.dims == 3:
-            new_shape = (self.mesh.Nx - 2, self.mesh.Ny - 2, self.mesh.Nz - 2)
+            if not self.other_subspaces_dims: # if other_subspaces_dims is None
+                new_shape = (self.mesh.Nx - 2, self.mesh.Ny - 2, self.mesh.Nz - 2)
+            else:
+                new_shape = tuple(self.other_subspaces_dims) + (self.mesh.Nx - 2, self.mesh.Ny - 2, self.mesh.Nz - 2)
         else:
             raise ValueError("Mesh dimensionality must be 1, 2, or 3.")
             
