@@ -1,6 +1,6 @@
-# Numerical Quantum Theory (numpt)
+# Numerical Quantum Theory (numqt)
 
-numpt is a Python package for constructing adaptive, non-uniform meshes and generating quantum mechanical operators on these grids. It also includes routines for creating spin operators (spin‑1/2 and spin‑3/2) that can be embedded in higher-dimensional Hilbert spaces via tensor products. This tool is ideal for researchers and developers working on numerical quantum mechanics, computational physics, and related fields.
+numqt is a Python package for constructing adaptive, non-uniform meshes and generating quantum mechanical operators on these grids. It also includes routines for creating spin operators (spin‑1/2 and spin‑3/2) that can be embedded in higher-dimensional Hilbert spaces via tensor products. This tool is ideal for researchers and developers working on numerical quantum mechanics, computational physics, and related fields.
 
 ## Table of Contents
 
@@ -49,8 +49,8 @@ numpt is a Python package for constructing adaptive, non-uniform meshes and gene
 Clone the repository and install dependencies:
 
 ```bash
-git clone https://github.com/OtiDioti/numpt.git
-cd numpt
+git clone https://github.com/OtiDioti/numqt.git
+cd numqt
 pip install -r requirements.txt
 ```
 
