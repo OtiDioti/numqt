@@ -1,4 +1,4 @@
-# numpt/__init__.py
+# numqt/__init__.py
 from .classes import *
 from .utils import *
 from .spin_ops import *
