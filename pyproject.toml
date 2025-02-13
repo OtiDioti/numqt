@@ -3,7 +3,7 @@ requires = ["setuptools", "wheel", "numpy"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "numpt"  # Replace with your package name
+name = "numqt"  # Replace with your package name
 version = "0.1.0"  # Update as needed
 description = "A Python package for numerical and quantum spin calculations."
 authors = [
@@ -24,4 +24,4 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["numpt"]
+include = ["numqt"]
