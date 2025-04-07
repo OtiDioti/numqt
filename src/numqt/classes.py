@@ -355,9 +355,9 @@ class canonic_ops:
 
     def p(self, mesh):
         """
-        Constructs the discretized momentum operator (p = -i*hbar*d/dx) using a 7-point
-        central difference stencil (6th-order accurate) on a uniform grid.
-
+        Constructs the discretized momentum operator (p = -i*hbar*d/dx) using a
+        2-point central difference stencil (2nd-order accurate) on a uniform grid.
+    
         Parameters
         ----------
         mesh : ndarray
@@ -368,16 +368,17 @@ class canonic_ops:
         """
         dx = np.abs(mesh[1] - mesh[0])
         N = len(mesh) - 2  # only use interior points
-
-        offsets = np.array([-3, -2, -1, 1, 2, 3])
-        coeffs = np.array([1, -9, 45, -45, 9, -1], dtype=complex)
-        prefactor = -1j * self.hbar / (60 * dx)
+    
+        # Simple central difference: df/dx ≈ [f(x+dx) - f(x-dx)]/(2*dx)
+        offsets = np.array([-1, 1])
+        coeffs = np.array([-1, 1], dtype=complex)
+        prefactor = -1j * self.hbar / (2 * dx)
         diagonals = [
             prefactor * coeff * np.ones(N - abs(offset), dtype=complex)
             for offset, coeff in zip(offsets, coeffs)
         ]
         p_mat = diags(diagonals, offsets, shape=(N, N), format='csr')
-
+    
         if self.additional_subspaces is not None:
             pos = self.additional_subspaces[0]
             kron_list = self.additional_subspaces[1:].copy()
@@ -385,12 +386,12 @@ class canonic_ops:
             return iterative_kron(kron_list)
         else:
             return p_mat
-
+    
     def p2(self, mesh):
         """
         Constructs the discretized squared momentum operator (p² = -ħ² d²/dx²)
-        using a 7-point central difference stencil (6th-order accurate) on a uniform grid.
-
+        using a 3-point central difference stencil (2nd-order accurate) on a uniform grid.
+    
         Parameters
         ----------
         mesh : ndarray
@@ -401,16 +402,18 @@ class canonic_ops:
         """
         dx = np.abs(mesh[1] - mesh[0])
         N = len(mesh) - 2  # interior points only
-
-        offsets = np.array([-3, -2, -1, 0, 1, 2, 3])
-        coeffs = np.array([-1, 12, -39, 56, -39, 12, -1], dtype=float)
-        prefactor = -self.hbar**2 / (180 * dx**2)
+    
+        # Standard 3-point stencil for second derivative:
+        # d²f/dx² ≈ [f(x-dx) - 2*f(x) + f(x+dx)]/(dx²)
+        offsets = np.array([-1, 0, 1])
+        coeffs = np.array([1, -2, 1], dtype=float)
+        prefactor = -self.hbar**2 / (dx**2)
         diagonals = [
             prefactor * coeff * np.ones(N - abs(offset), dtype=float)
             for offset, coeff in zip(offsets, coeffs)
         ]
         p2_mat = diags(diagonals, offsets, shape=(N, N), format='csr')
-
+    
         if self.additional_subspaces is not None:
             pos = self.additional_subspaces[0]
             kron_list = self.additional_subspaces[1:].copy()
@@ -418,12 +421,12 @@ class canonic_ops:
             return iterative_kron(kron_list)
         else:
             return p2_mat
-
+    
     def x(self, mesh):
         """
-        Constructs the discretized position operator on a nonuniform mesh
+        Constructs the discretized position operator
         (defined on interior points only).
-
+    
         Parameters
         ----------
         mesh : ndarray
@@ -434,7 +437,7 @@ class canonic_ops:
         """
         x_interior = mesh[1:-1]
         X = diags(x_interior, 0, format='csr')
-
+    
         if self.additional_subspaces is not None:
             pos = self.additional_subspaces[0]
             kron_list = self.additional_subspaces[1:].copy()
@@ -442,11 +445,11 @@ class canonic_ops:
             return iterative_kron(kron_list)
         else:
             return X
-
+    
     def x2(self, mesh):
         """
-        Constructs the discretized x² operator on a nonuniform mesh.
-
+        Constructs the discretized x² operator.
+    
         Parameters
         ----------
         mesh : ndarray
@@ -457,7 +460,7 @@ class canonic_ops:
         """
         x_interior = mesh[1:-1]
         X2 = diags(x_interior**2, 0, format='csr')
-
+    
         if self.additional_subspaces is not None:
             pos = self.additional_subspaces[0]
             kron_list = self.additional_subspaces[1:].copy()
@@ -465,7 +468,6 @@ class canonic_ops:
             return iterative_kron(kron_list)
         else:
             return X2
-
     def project(self, basis):
         """
         Projects the canonical operators (position, momentum, and their squares) onto a new basis set.
