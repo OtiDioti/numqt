@@ -13,26 +13,11 @@ class Mesh:
                  xbounds: tuple,
                  ybounds: tuple = None,
                  zbounds: tuple = None,
-                 initial_points: int = 20,
-                 dx_max: float = None,
-                 dy_max: float = None,
-                 dz_max: float = None,
-                 dx_func: callable = None,
-                 dy_func: callable = None,
-                 dz_func: callable = None,
-                 max_iter: int = 10):
+                 nx: int = 50,
+                 ny: int = None,
+                 nz: int = None):
         """
-        Constructs an adaptive structured grid in 1D, 2D, or 3D.
-
-        The grid is initially defined uniformly (with `initial_points` along each axis)
-        over the specified intervals. Then, the grid is refined adaptively:
-          - For each cell (an interval in 1D, rectangle in 2D, or box in 3D), its center is computed.
-          - The allowed spacing at that cell center is determined by a function. For example,
-            for the x-direction: allowed_dx = dx_func(x_center). If no dx_func is provided,
-            the allowed spacing is constant and equal to dx_max.
-          - If the cell’s size along a given axis exceeds the allowed spacing, the midpoint
-            along that axis is added.
-          - This process is repeated until no cell is refined (or until max_iter iterations).
+        Constructs a uniform structured grid in 1D, 2D, or 3D.
 
         Parameters
         ----------
@@ -40,22 +25,15 @@ class Mesh:
             Dimensionality of the grid. Must be 1, 2, or 3.
         xbounds, ybounds, zbounds : tuple
             Endpoints of the domain in x, y, and z. (Unused bounds are ignored for dims < 3.)
-        initial_points : int, optional
-            Number of grid points to start with along each axis (including endpoints).
-        dx_max, dy_max, dz_max : float
-            Global maximum allowed spacing along x, y, and z (used as default if no function is provided).
-        dx_func, dy_func, dz_func : callable, optional
-            Functions that return the allowed spacing at a given coordinate.
-            For example, dx_func(x) should return the allowed spacing at position x.
-            If not provided, a constant function returning dx_max (etc.) is used.
-        max_iter : int, optional
-            Maximum number of refinement iterations.
+        nx, ny, nz : int
+            Number of grid points along x, y, and z axes (including endpoints).
+            If ny or nz are not provided, they default to nx.
         """
-        # Validate the dimensionality.
+        # Validate the dimensionality
         if dims not in [1, 2, 3]:
             raise ValueError("dims must be 1, 2, or 3.")
 
-        # Validate domain bounds.
+        # Validate domain bounds
         if xbounds is None:
             raise ValueError("xbounds must be provided.")
         if dims >= 2 and ybounds is None:
@@ -63,145 +41,50 @@ class Mesh:
         if dims == 3 and zbounds is None:
             raise ValueError("For dims==3, zbounds must be provided.")
 
-        # Validate essential grid parameters.
-        if dx_max is None:
-            raise ValueError("dx_max must be provided for the x-direction.")
-        if dims >= 2 and dy_max is None:
-            raise ValueError("dy_max must be provided for dims>=2.")
-        if dims == 3 and dz_max is None:
-            raise ValueError("dz_max must be provided for dims==3.")
+        # Set default values for grid points if not provided
+        if ny is None:
+            ny = nx
+        if nz is None:
+            nz = nx
 
-        # If no allowed-spacing function is provided, use a constant function.
-        if dx_func is None:
-            dx_func = lambda x: dx_max
-        if dims >= 2:
-            if dy_func is None:
-                dy_func = lambda y: dy_max
-        if dims == 3:
-            if dz_func is None:
-                dz_func = lambda z: dz_max
-
-        # Save basic parameters.
+        # Save parameters
         self.dims = dims
         self.xbounds = xbounds
         self.ybounds = ybounds if dims >= 2 else None
         self.zbounds = zbounds if dims == 3 else None
-
-        self.initial_points = initial_points
-        self.dx_max = dx_max
-        self.dy_max = dy_max if dims >= 2 else None
-        self.dz_max = dz_max if dims == 3 else None
-
-        self.dx_func = dx_func
-        self.dy_func = dy_func if dims >= 2 else None
-        self.dz_func = dz_func if dims == 3 else None
-
-        self.max_iter = max_iter
-
-        # Unpack domain bounds for convenience.
+        
+        # Unpack domain bounds for convenience
         self.x0, self.x1 = xbounds
         if dims >= 2:
             self.y0, self.y1 = ybounds
         if dims == 3:
             self.z0, self.z1 = zbounds
-
-        # Generate the grid based on the dimensionality.
-        self.generate_mesh()
-
+            
+        # Generate uniform grid based on the dimensionality
+        self.generate_mesh(nx, ny, nz)
+        
+        # Store grid sizes
         self.Nx = len(self.mesh_x)
         self.Ny = len(self.mesh_y) if dims >= 2 else 0
         self.Nz = len(self.mesh_z) if dims == 3 else 0
 
-    def generate_mesh(self):
-        """Creates the adaptive grid based on the specified dimensionality and allowed-spacing functions."""
-        if self.dims == 1:
-            # 1D grid only along x.
-            self.mesh_x = np.linspace(self.x0, self.x1, self.initial_points)
-            for it in range(self.max_iter):
-                cell_refined = False
-                new_x = []
-                for i in range(len(self.mesh_x) - 1):
-                    x0 = self.mesh_x[i]
-                    x1 = self.mesh_x[i+1]
-                    x_center = (x0 + x1) / 2.0
-                    allowed_dx = self.dx_func(x_center)
-                    if (x1 - x0) > allowed_dx:
-                        new_x.append(x_center)
-                        cell_refined = True
-                if not cell_refined:
-                    break
-                self.mesh_x = np.sort(np.unique(np.concatenate([self.mesh_x, new_x])))
-
-        elif self.dims == 2:
-            # 2D grid along x and y.
-            self.mesh_x = np.linspace(self.x0, self.x1, self.initial_points)
-            self.mesh_y = np.linspace(self.y0, self.y1, self.initial_points)
-            for it in range(self.max_iter):
-                cell_refined = False
-                new_x = []
-                new_y = []
-                for i in range(len(self.mesh_x) - 1):
-                    for j in range(len(self.mesh_y) - 1):
-                        x0 = self.mesh_x[i]
-                        x1 = self.mesh_x[i+1]
-                        y0 = self.mesh_y[j]
-                        y1 = self.mesh_y[j+1]
-                        x_center = (x0 + x1) / 2.0
-                        y_center = (y0 + y1) / 2.0
-                        allowed_dx = self.dx_func(x_center)
-                        allowed_dy = self.dy_func(y_center)
-                        if (x1 - x0) > allowed_dx:
-                            new_x.append(x_center)
-                            cell_refined = True
-                        if (y1 - y0) > allowed_dy:
-                            new_y.append(y_center)
-                            cell_refined = True
-                if not cell_refined:
-                    break
-                self.mesh_x = np.sort(np.unique(np.concatenate([self.mesh_x, new_x])))
-                self.mesh_y = np.sort(np.unique(np.concatenate([self.mesh_y, new_y])))
-
-        elif self.dims == 3:
-            # 3D grid along x, y, and z.
-            self.mesh_x = np.linspace(self.x0, self.x1, self.initial_points)
-            self.mesh_y = np.linspace(self.y0, self.y1, self.initial_points)
-            self.mesh_z = np.linspace(self.z0, self.z1, self.initial_points)
-            for it in range(self.max_iter):
-                cell_refined = False
-                new_x = []
-                new_y = []
-                new_z = []
-                for i in range(len(self.mesh_x) - 1):
-                    for j in range(len(self.mesh_y) - 1):
-                        for k in range(len(self.mesh_z) - 1):
-                            x0 = self.mesh_x[i]
-                            x1 = self.mesh_x[i+1]
-                            y0 = self.mesh_y[j]
-                            y1 = self.mesh_y[j+1]
-                            z0 = self.mesh_z[k]
-                            z1 = self.mesh_z[k+1]
-                            x_center = (x0 + x1) / 2.0
-                            y_center = (y0 + y1) / 2.0
-                            z_center = (z0 + z1) / 2.0
-                            allowed_dx = self.dx_func(x_center)
-                            allowed_dy = self.dy_func(y_center)
-                            allowed_dz = self.dz_func(z_center)
-                            if (x1 - x0) > allowed_dx:
-                                new_x.append(x_center)
-                                cell_refined = True
-                            if (y1 - y0) > allowed_dy:
-                                new_y.append(y_center)
-                                cell_refined = True
-                            if (z1 - z0) > allowed_dz:
-                                new_z.append(z_center)
-                                cell_refined = True
-                if not cell_refined:
-                    break
-                self.mesh_x = np.sort(np.unique(np.concatenate([self.mesh_x, new_x])))
-                self.mesh_y = np.sort(np.unique(np.concatenate([self.mesh_y, new_y])))
-                self.mesh_z = np.sort(np.unique(np.concatenate([self.mesh_z, new_z])))
-                
-    
+    def generate_mesh(self, nx, ny, nz):
+        """Creates uniform grids for each dimension."""
+        # Create x grid
+        self.mesh_x = np.linspace(self.x0, self.x1, nx)
+        
+        # Create y grid if needed
+        if self.dims >= 2:
+            self.mesh_y = np.linspace(self.y0, self.y1, ny)
+        else:
+            self.mesh_y = None
+            
+        # Create z grid if needed
+        if self.dims == 3:
+            self.mesh_z = np.linspace(self.z0, self.z1, nz)
+        else:
+            self.mesh_z = None
+            
     def get_grids(self):
         """
         Returns the grid arrays.
@@ -218,6 +101,28 @@ class Mesh:
             return self.mesh_x, self.mesh_y
         elif self.dims == 3:
             return self.mesh_x, self.mesh_y, self.mesh_z
+    
+    def get_spacings(self):
+        """
+        Returns the grid spacings for each dimension.
+        
+        Returns
+        -------
+        For dims==1: dx
+        For dims==2: dx, dy
+        For dims==3: dx, dy, dz
+        """
+        dx = (self.x1 - self.x0) / (self.Nx - 1)
+        
+        if self.dims == 1:
+            return dx
+        elif self.dims == 2:
+            dy = (self.y1 - self.y0) / (self.Ny - 1)
+            return dx, dy
+        elif self.dims == 3:
+            dy = (self.y1 - self.y0) / (self.Ny - 1)
+            dz = (self.z1 - self.z0) / (self.Nz - 1)
+            return dx, dy, dz
 
     # ----------------------------------------------------------
     # Visualization Methods
