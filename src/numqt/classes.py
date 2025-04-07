@@ -468,59 +468,54 @@ class canonic_ops():
             }
         return outpt
 
-    
     def p(self, mesh, other_subspaces=None):
         """
-        Constructs the discretized momentum operator (p = -i hbar d/dx) on a nonuniform mesh.
-        The first derivative at interior node x_i (with mesh index i, i = 1,...,N_full-2) is
-        approximated by a centered difference formula adapted for nonuniform spacing:
+        Constructs the discretized momentum operator (p = -i*hbar*d/dx) using a 7-point
+        central difference stencil approximation (6th-order accurate) on a uniform grid.
         
-           f'(x_i) ≈ A f(x_{i-1}) + B f(x_i) + C f(x_{i+1}),
-           
-        where, if h1 = x_i - x_{i-1} and h2 = x_{i+1} - x_i,
-           A = -h2/(h1*(h1+h2)),
-           B = (h2 - h1)/(h1*h2),
-           C =  h1/(h2*(h1+h2)).
-           
-        Then p = -i*hbar*(d/dx).
+        The 7-point stencil for approximating the first derivative is given by:
+        
+            f'(x) ≈ [ f(x-3h) - 9f(x-2h) + 45f(x-h) - 45f(x+h) + 9f(x+2h) - f(x+3h) ] / (60h)
+        
+        Multiplying the derivative by -i*hbar gives the momentum operator.
+        
         Parameters
         ----------
         mesh : ndarray
             1D mesh array encoding information for the given dimension's grid.
         other_subspaces : list, optional
-            If provided, a list whose first element is an integer specifying the position 
+            If provided, a list whose first element is an integer specifying the position
             at which the momentum operator should be inserted in a tensor (Kronecker) product.
             The remaining elements should be the identity operators for the other Hilbert spaces.
             For example, to have p act on the first factor in a two-space product, you might use:
                 other_subspaces = [0, I_second]
-        """
-        N_full = len(mesh)
-        N = N_full - 2  # interior points only
-        rows, cols, data = [], [], []
-        for i in range(1, N_full - 1):
-            idx = i - 1  # index in the interior operator
-            h1 = np.abs(mesh[i] - mesh[i - 1])
-            h2 = np.abs(mesh[i + 1] - mesh[i])
-            A = -h2 / (h1 * (h1 + h2))
-            B = (h2 - h1) / (h1 * h2)
-            C = h1 / (h2 * (h1 + h2))
-            # Fill lower neighbor coefficient
-            if idx - 1 >= 0:
-                rows.append(idx)
-                cols.append(idx - 1)
-                data.append(A)
-            # Diagonal term
-            rows.append(idx)
-            cols.append(idx)
-            data.append(B)
-            # Upper neighbor coefficient
-            if idx + 1 < N:
-                rows.append(idx)
-                cols.append(idx + 1)
-                data.append(C)
-        D = sparse.csr_array((data, (rows, cols)), shape=(N, N))
         
-        p_mat = -1j * self.hbar * D
+        Returns
+        -------
+        scipy.sparse.spmatrix or numpy.ndarray
+            An (N × N) matrix representation of the momentum operator.
+        """
+        dx = np.abs(mesh[i] - mesh[i - 1])
+        #N = N_full - 2
+        # Offsets for the 7-point stencil (skip the central point since its coefficient is zero)
+        offsets = np.array([-3, -2, -1, 1, 2, 3])
+        # Stencil coefficients corresponding to the 7-point central difference formula:
+        # [1, -9, 45, -45, 9, -1]
+        coeffs = np.array([1, -9, 45, -45, 9, -1], dtype=complex)
+        
+        # The prefactor includes the momentum operator constants (-i * hbar) and the derivative factor (1/(60h))
+        prefactor = -1j * self.hbar / (60 * dx)
+        
+        # Build the diagonals for the sparse matrix using the stencil coefficients
+        diagonals = [
+            prefactor * coeff * np.ones(self.N - abs(offset), dtype=complex)
+            for offset, coeff in zip(offsets, coeffs)
+        ]
+        
+        # Construct the sparse matrix with the given diagonals and offsets
+        p_mat = sparse.diags(diagonals, offsets, shape=(self.N, self.N), format='csr')
+        
+        # If other subspaces are provided, insert the momentum operator into the tensor product
         if other_subspaces is not None:
             pos = other_subspaces[0]
             kron_list = other_subspaces[1:]
@@ -528,52 +523,54 @@ class canonic_ops():
             return iterative_kron(kron_list)
         else:
             return p_mat
-            
-    
+
     def p2(self, mesh, other_subspaces=None):
         """
-        Constructs the discretized squared momentum operator (p^2 = -ħ² d²/dx²) on a nonuniform mesh.
-        The second derivative is approximated at interior node x_i by:
-        
-             ψ''(x_i) ≈ 2/(h1+h2)*[ (ψ(x_{i+1}) - ψ(x_i))/h2 - (ψ(x_i)-ψ(x_{i-1}))/h1 ],
-             
-        where h1 = x_i - x_{i-1} and h2 = x_{i+1} - x_i.
+        Constructs the discretized squared momentum operator (p² = -ħ² d²/dx²) using a 7-point 
+        central difference stencil (6th-order accurate) on a uniform grid.
+    
+        The 7-point stencil for approximating the second derivative is given by:
+    
+            f''(x) ≈ [ -f(x-3h) + 12f(x-2h) - 39f(x-h) + 56f(x) - 39f(x+h) + 12f(x+2h) - f(x+3h) ] / (180 h²)
+    
+        Multiplying the second derivative by -ħ² yields the squared momentum operator.
+    
         Parameters
         ----------
         mesh : ndarray
             1D mesh array encoding information for the given dimension's grid.
         other_subspaces : list, optional
             If provided, a list whose first element is an integer specifying the position 
-            at which the momentum operator should be inserted in a tensor (Kronecker) product.
+            at which the squared momentum operator should be inserted in a tensor (Kronecker) product.
             The remaining elements should be the identity operators for the other Hilbert spaces.
-            For example, to have p act on the first factor in a two-space product, you might use:
+            For example, to have p² act on the first factor in a two-space product, you might use:
                 other_subspaces = [0, I_second]
+    
+        Returns
+        -------
+        scipy.sparse.spmatrix or numpy.ndarray
+            An (N × N) matrix representation of the squared momentum operator.
         """
-        N_full = len(mesh)
-        N = N_full - 2
-        rows, cols, data = [], [], []
-        for i in range(1, N_full - 1):
-            idx = i - 1
-            h1 = np.abs(mesh[i] - mesh[i - 1])
-            h2 = np.abs(mesh[i + 1] - mesh[i])
-            coeff = 2.0 / (h1 + h2)
-            A = coeff / h1
-            C = coeff / h2
-            B = - (A + C)
-            if idx - 1 >= 0:
-                rows.append(idx)
-                cols.append(idx - 1)
-                data.append(A)
-            rows.append(idx)
-            cols.append(idx)
-            data.append(B)
-            if idx + 1 < N:
-                rows.append(idx)
-                cols.append(idx + 1)
-                data.append(C)
-        D2 = sparse.csr_matrix((data, (rows, cols)), shape=(N, N))
-        p2_mat = -self.hbar**2 * D2
+        dx = np.abs(mesh[i] - mesh[i - 1])
+        #N = N_full - 2
+        # Offsets for the 7-point stencil
+        offsets = np.array([-3, -2, -1, 0, 1, 2, 3])
+        # Corresponding coefficients for the 7-point finite difference formula
+        coeffs = np.array([-1, 12, -39, 56, -39, 12, -1], dtype=float)
         
+        # The prefactor includes the -ħ² factor and the derivative discretization factor
+        prefactor = -self.hbar**2 / (180 * dx**2)
+        
+        # Build the diagonals using the stencil coefficients
+        diagonals = [
+            prefactor * coeff * np.ones(self.N - abs(offset), dtype=float)
+            for offset, coeff in zip(offsets, coeffs)
+        ]
+        
+        # Construct the sparse matrix with the given diagonals and offsets
+        p2_mat = sparse.diags(diagonals, offsets, shape=(self.N, self.N), format='csr')
+        
+        # If other subspaces are provided, insert the squared momentum operator into the tensor product
         if other_subspaces is not None:
             pos = other_subspaces[0]
             kron_list = other_subspaces[1:]
@@ -581,6 +578,9 @@ class canonic_ops():
             return iterative_kron(kron_list)
         else:
             return p2_mat
+
+    
+   
     
     
     
