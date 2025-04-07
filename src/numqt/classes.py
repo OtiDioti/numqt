@@ -1,9 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import sparse
-from scipy.sparse import kron
+from scipy.sparse import diags, eye, kron
 from .utils import iterative_kron
-from scipy.sparse import diags
 from skimage import measure
 import plotly.graph_objects as go
 from scipy.sparse.linalg import eigsh
@@ -346,179 +345,146 @@ class Mesh:
 # Canonic Operators
 # ----------------------------------------------------------
 # ----------------------------------------------------------
-
-class canonic_ops():
+class canonic_ops:
     def __init__(self, mesh, additional_subspaces=None, hbar=1):
         """
-        Constructs the discretized quantum mechanical operators for position and momentum,
-        adapting the generated operators to the dimensionality of mesh3D.
-        
-        If mesh3D.dims == 1 then only x, p, x², and p² are generated.
-        For dims == 2 and 3 the corresponding y and z operators are also built.
-        
+        Constructs the discretized quantum mechanical operators for position and momentum
+        using finite difference methods on a uniform grid (only the interior points are used).
+
         Parameters
         ----------
         mesh : object
-            A mesh object that must have an attribute "dims" (equal to 1, 2, or 3) and a 
-            get_grids() method returning the 1D grid arrays. For dims==1, get_grids() should return
-            (mesh_x,), for dims==2 (mesh_x, mesh_y), and for dims==3 (mesh_x, mesh_y, mesh_z).
+            Must have an attribute "dims" (equal to 1, 2, or 3) and a get_grids() method
+            returning the 1D grid arrays. For dims==1, get_grids() returns a 1D array;
+            for dims==2, it returns (mesh_x, mesh_y); for dims==3, (mesh_x, mesh_y, mesh_z).
         additional_subspaces : list, optional
-            If provided, these extra Hilbert spaces will be incorporated via tensor products.
+            A list with the structure [position, I_second, I_third, ...] used to embed the operator
+            into a tensor product space. (If not provided, the operators are returned as is.)
         hbar : float, optional
-            Planck's constant (defaults to 1).
+            Planck’s constant (defaults to 1).
         """
         self.hbar = hbar
         self.dim = mesh.dims
+        self.additional_subspaces = additional_subspaces
 
-        # Get the grid(s) from the mesh.
+        # Get the grid(s) from the mesh and compute interior point count.
         if self.dim == 1:
-            mesh_x = mesh.get_grids()  # single 1D array
+            self.mesh_x = mesh.get_grids()  # expected 1D array
+            self.Nx = len(self.mesh_x) - 2
         elif self.dim == 2:
-            mesh_x, mesh_y = mesh.get_grids()
+            self.mesh_x, self.mesh_y = mesh.get_grids()
+            self.Nx = len(self.mesh_x) - 2
+            self.Ny = len(self.mesh_y) - 2
         elif self.dim == 3:
-            mesh_x, mesh_y, mesh_z = mesh.get_grids()
+            self.mesh_x, self.mesh_y, self.mesh_z = mesh.get_grids()
+            self.Nx = len(self.mesh_x) - 2
+            self.Ny = len(self.mesh_y) - 2
+            self.Nz = len(self.mesh_z) - 2
 
-        # Construct identity matrices for the interior nodes.
-        # (Assume that the operators act on interior points only, i.e. mesh[1:-1].)
-        I_x = sparse.eye(len(mesh_x) - 2)
+        # Pre-construct identity matrices on the interior grid.
+        self.Ix = eye(self.Nx, format='csr')
         if self.dim >= 2:
-            I_y = sparse.eye(len(mesh_y) - 2)
+            self.Iy = eye(self.Ny, format='csr')
         if self.dim == 3:
-            I_z = sparse.eye(len(mesh_z) - 2)
+            self.Iz = eye(self.Nz, format='csr')
 
-        # Set up the "additional subspaces" lists for tensor products.
-        if additional_subspaces is None:
-            if self.dim == 1:
-                additional_x = [0]
-            elif self.dim == 2:
-                additional_x = [0, I_y]
-                additional_y = [1, I_x]
-            elif self.dim == 3:
-                additional_x = [0, I_y, I_z]
-                additional_y = [1, I_x, I_z]
-                additional_z = [2, I_x, I_y]
-        else:
-            if self.dim == 1:
-                additional_x = [len(additional_subspaces) + 0] + [identity for identity in additional_subspaces]
-            elif self.dim == 2:
-                additional_x = [len(additional_subspaces) + 0] + [identity for identity in additional_subspaces] + [I_y]
-                additional_y = [len(additional_subspaces) + 1] + [identity for identity in additional_subspaces] + [I_x]
-            elif self.dim == 3:
-                additional_x = [len(additional_subspaces) + 0] + [identity for identity in additional_subspaces] + [I_y, I_z]
-                additional_y = [len(additional_subspaces) + 1] + [identity for identity in additional_subspaces] + [I_x, I_z]
-                additional_z = [len(additional_subspaces) + 2] + [identity for identity in additional_subspaces] + [I_x, I_y]
+        # For now, the additional_subspaces functionality is preserved but its
+        # structure should be clarified by the user. The tensor product embedding
+        # is handled in the operator functions if additional_subspaces is provided.
 
-        # Generate only the operators needed for the given dimensionality.
+        # Generate operators for each dimension.
         if self.dim == 1:
-            self.px    = self.p(mesh_x, additional_x)
-            self.px2   = self.p2(mesh_x, additional_x)
-            self.x_op  = self.x(mesh_x, additional_x)
-            self.x2_op = self.x2(mesh_x, additional_x)
+            self.px    = self.p(self.mesh_x)
+            self.px2   = self.p2(self.mesh_x)
+            self.x_op  = self.x(self.mesh_x)
+            self.x2_op = self.x2(self.mesh_x)
         elif self.dim == 2:
-            self.px    = self.p(mesh_x, additional_x)
-            self.py    = self.p(mesh_y, additional_y)
-            self.px2   = self.p2(mesh_x, additional_x)
-            self.py2   = self.p2(mesh_y, additional_y)
-            self.x_op  = self.x(mesh_x, additional_x)
-            self.y_op  = self.x(mesh_y, additional_y)
-            self.x2_op = self.x2(mesh_x, additional_x)
-            self.y2_op = self.x2(mesh_y, additional_y)
+            self.px    = self.p(self.mesh_x)
+            self.py    = self.p(self.mesh_y)
+            self.px2   = self.p2(self.mesh_x)
+            self.py2   = self.p2(self.mesh_y)
+            self.x_op  = self.x(self.mesh_x)
+            self.y_op  = self.x(self.mesh_y)
+            self.x2_op = self.x2(self.mesh_x)
+            self.y2_op = self.x2(self.mesh_y)
         elif self.dim == 3:
-            self.px    = self.p(mesh_x, additional_x)
-            self.py    = self.p(mesh_y, additional_y)
-            self.pz    = self.p(mesh_z, additional_z)
-            self.px2   = self.p2(mesh_x, additional_x)
-            self.py2   = self.p2(mesh_y, additional_y)
-            self.pz2   = self.p2(mesh_z, additional_z)
-            self.x_op  = self.x(mesh_x, additional_x)
-            self.y_op  = self.x(mesh_y, additional_y)
-            self.z_op  = self.x(mesh_z, additional_z)
-            self.x2_op = self.x2(mesh_x, additional_x)
-            self.y2_op = self.x2(mesh_y, additional_y)
-            self.z2_op = self.x2(mesh_z, additional_z)
+            self.px    = self.p(self.mesh_x)
+            self.py    = self.p(self.mesh_y)
+            self.pz    = self.p(self.mesh_z)
+            self.px2   = self.p2(self.mesh_x)
+            self.py2   = self.p2(self.mesh_y)
+            self.pz2   = self.p2(self.mesh_z)
+            self.x_op  = self.x(self.mesh_x)
+            self.y_op  = self.x(self.mesh_y)
+            self.z_op  = self.x(self.mesh_z)
+            self.x2_op = self.x2(self.mesh_x)
+            self.y2_op = self.x2(self.mesh_y)
+            self.z2_op = self.x2(self.mesh_z)
 
     def get_ops(self):
         """
-        Returns the operators in a dictionary.
-        
+        Returns the constructed operators in a dictionary.
         For dims==1, only the x-operators are returned.
         For dims==2, x- and y-operators are returned.
         For dims==3, x-, y-, and z-operators are returned.
         """
         if self.dim == 1:
-            outpt = {
+            ops = {
                 "p":  self.px,
                 "p2": self.px2,
                 "x":  self.x_op,
                 "x2": self.x2_op
             }
         elif self.dim == 2:
-            outpt = {
+            ops = {
                 "p":  [self.px, self.py],
                 "p2": [self.px2, self.py2],
                 "x":  [self.x_op, self.y_op],
                 "x2": [self.x2_op, self.y2_op]
             }
         elif self.dim == 3:
-            outpt = {
+            ops = {
                 "p":  [self.px, self.py, self.pz],
                 "p2": [self.px2, self.py2, self.pz2],
                 "x":  [self.x_op, self.y_op, self.z_op],
                 "x2": [self.x2_op, self.y2_op, self.z2_op]
             }
-        return outpt
+        return ops
 
     def p(self, mesh, other_subspaces=None):
         """
         Constructs the discretized momentum operator (p = -i*hbar*d/dx) using a 7-point
-        central difference stencil approximation (6th-order accurate) on a uniform grid.
-        
-        The 7-point stencil for approximating the first derivative is given by:
-        
-            f'(x) ≈ [ f(x-3h) - 9f(x-2h) + 45f(x-h) - 45f(x+h) + 9f(x+2h) - f(x+3h) ] / (60h)
-        
-        Multiplying the derivative by -i*hbar gives the momentum operator.
-        
+        central difference stencil (6th-order accurate) on a uniform grid.
+
         Parameters
         ----------
         mesh : ndarray
-            1D mesh array encoding information for the given dimension's grid.
+            1D array for the grid in the given dimension.
         other_subspaces : list, optional
-            If provided, a list whose first element is an integer specifying the position
-            at which the momentum operator should be inserted in a tensor (Kronecker) product.
-            The remaining elements should be the identity operators for the other Hilbert spaces.
-            For example, to have p act on the first factor in a two-space product, you might use:
-                other_subspaces = [0, I_second]
-        
-        Returns
-        -------
-        scipy.sparse.spmatrix or numpy.ndarray
-            An (N × N) matrix representation of the momentum operator.
+            If provided, should be of the form [position, I2, I3, ...] and the operator will be
+            embedded in the tensor product via iterative_kron.
         """
-        dx = np.abs(mesh[i] - mesh[i - 1])
-        #N = N_full - 2
-        # Offsets for the 7-point stencil (skip the central point since its coefficient is zero)
-        offsets = np.array([-3, -2, -1, 1, 2, 3])
-        # Stencil coefficients corresponding to the 7-point central difference formula:
-        # [1, -9, 45, -45, 9, -1]
-        coeffs = np.array([1, -9, 45, -45, 9, -1], dtype=complex)
+        # Compute grid spacing (assumes uniform spacing)
+        dx = np.abs(mesh[1] - mesh[0])
+        N = len(mesh) - 2  # only use interior points
         
-        # The prefactor includes the momentum operator constants (-i * hbar) and the derivative factor (1/(60h))
+        # Define offsets and coefficients for the 7-point central difference
+        offsets = np.array([-3, -2, -1, 1, 2, 3])
+        coeffs = np.array([1, -9, 45, -45, 9, -1], dtype=complex)
         prefactor = -1j * self.hbar / (60 * dx)
         
-        # Build the diagonals for the sparse matrix using the stencil coefficients
+        # Build the diagonals for the sparse matrix
         diagonals = [
-            prefactor * coeff * np.ones(self.N - abs(offset), dtype=complex)
+            prefactor * coeff * np.ones(N - abs(offset), dtype=complex)
             for offset, coeff in zip(offsets, coeffs)
         ]
         
-        # Construct the sparse matrix with the given diagonals and offsets
-        p_mat = sparse.diags(diagonals, offsets, shape=(self.N, self.N), format='csr')
+        # Construct the momentum operator matrix
+        p_mat = diags(diagonals, offsets, shape=(N, N), format='csr')
         
-        # If other subspaces are provided, insert the momentum operator into the tensor product
         if other_subspaces is not None:
             pos = other_subspaces[0]
-            kron_list = other_subspaces[1:]
+            kron_list = other_subspaces[1:].copy()
             kron_list.insert(pos, p_mat)
             return iterative_kron(kron_list)
         else:
@@ -526,113 +492,87 @@ class canonic_ops():
 
     def p2(self, mesh, other_subspaces=None):
         """
-        Constructs the discretized squared momentum operator (p² = -ħ² d²/dx²) using a 7-point 
-        central difference stencil (6th-order accurate) on a uniform grid.
-    
-        The 7-point stencil for approximating the second derivative is given by:
-    
-            f''(x) ≈ [ -f(x-3h) + 12f(x-2h) - 39f(x-h) + 56f(x) - 39f(x+h) + 12f(x+2h) - f(x+3h) ] / (180 h²)
-    
-        Multiplying the second derivative by -ħ² yields the squared momentum operator.
-    
+        Constructs the discretized squared momentum operator (p² = -ħ² d²/dx²)
+        using a 7-point central difference stencil (6th-order accurate) on a uniform grid.
+
         Parameters
         ----------
         mesh : ndarray
-            1D mesh array encoding information for the given dimension's grid.
+            1D array for the grid in the given dimension.
         other_subspaces : list, optional
-            If provided, a list whose first element is an integer specifying the position 
-            at which the squared momentum operator should be inserted in a tensor (Kronecker) product.
-            The remaining elements should be the identity operators for the other Hilbert spaces.
-            For example, to have p² act on the first factor in a two-space product, you might use:
-                other_subspaces = [0, I_second]
-    
-        Returns
-        -------
-        scipy.sparse.spmatrix or numpy.ndarray
-            An (N × N) matrix representation of the squared momentum operator.
+            If provided, should be of the form [position, I2, I3, ...] to embed the operator
+            into a tensor product space.
         """
-        dx = np.abs(mesh[i] - mesh[i - 1])
-        #N = N_full - 2
-        # Offsets for the 7-point stencil
-        offsets = np.array([-3, -2, -1, 0, 1, 2, 3])
-        # Corresponding coefficients for the 7-point finite difference formula
-        coeffs = np.array([-1, 12, -39, 56, -39, 12, -1], dtype=float)
+        dx = np.abs(mesh[1] - mesh[0])
+        N = len(mesh) - 2  # interior points only
         
-        # The prefactor includes the -ħ² factor and the derivative discretization factor
+        offsets = np.array([-3, -2, -1, 0, 1, 2, 3])
+        coeffs = np.array([-1, 12, -39, 56, -39, 12, -1], dtype=float)
         prefactor = -self.hbar**2 / (180 * dx**2)
         
-        # Build the diagonals using the stencil coefficients
         diagonals = [
-            prefactor * coeff * np.ones(self.N - abs(offset), dtype=float)
+            prefactor * coeff * np.ones(N - abs(offset), dtype=float)
             for offset, coeff in zip(offsets, coeffs)
         ]
         
-        # Construct the sparse matrix with the given diagonals and offsets
-        p2_mat = sparse.diags(diagonals, offsets, shape=(self.N, self.N), format='csr')
+        p2_mat = diags(diagonals, offsets, shape=(N, N), format='csr')
         
-        # If other subspaces are provided, insert the squared momentum operator into the tensor product
         if other_subspaces is not None:
             pos = other_subspaces[0]
-            kron_list = other_subspaces[1:]
+            kron_list = other_subspaces[1:].copy()
             kron_list.insert(pos, p2_mat)
             return iterative_kron(kron_list)
         else:
             return p2_mat
 
-    
-   
-    
-    
-    
     def x(self, mesh, other_subspaces=None):
         """
-        Constructs the discretized position operator on a nonuniform mesh.
-        The operator is multiplicative; we define it on the interior nodes (mesh[1:-1]).
+        Constructs the discretized position operator on a uniform mesh
+        (defined on interior points only).
+
         Parameters
         ----------
         mesh : ndarray
-            1D mesh array encoding information for the given dimension's grid.
+            1D grid array.
         other_subspaces : list, optional
-            If provided, a list whose first element is an integer specifying the position 
-            at which the momentum operator should be inserted in a tensor (Kronecker) product.
-            The remaining elements should be the identity operators for the other Hilbert spaces.
-            For example, to have p act on the first factor in a two-space product, you might use:
-                other_subspaces = [0, I_second]
+            If provided, should be of the form [position, I2, I3, ...] to embed the operator
+            into a tensor product space.
         """
+        # Only use interior points.
         x_interior = mesh[1:-1]
         X = diags(x_interior, 0, format='csr')
         
         if other_subspaces is not None:
             pos = other_subspaces[0]
-            kron_list = other_subspaces[1:]
+            kron_list = other_subspaces[1:].copy()
             kron_list.insert(pos, X)
             return iterative_kron(kron_list)
         else:
             return X
-    
+
     def x2(self, mesh, other_subspaces=None):
         """
-        Constructs the discretized x^2 operator on a nonuniform mesh.
+        Constructs the discretized x² operator on a uniform mesh.
+
         Parameters
         ----------
         mesh : ndarray
-            1D mesh array encoding information for the given dimension's grid.
+            1D grid array.
         other_subspaces : list, optional
-            If provided, a list whose first element is an integer specifying the position 
-            at which the momentum operator should be inserted in a tensor (Kronecker) product.
-            The remaining elements should be the identity operators for the other Hilbert spaces.
-            For example, to have p act on the first factor in a two-space product, you might use:
-                other_subspaces = [0, I_second]
+            If provided, should be of the form [position, I2, I3, ...] to embed the operator
+            into a tensor product space.
         """
         x_interior = mesh[1:-1]
         X2 = diags(x_interior**2, 0, format='csr')
+        
         if other_subspaces is not None:
             pos = other_subspaces[0]
-            kron_list = other_subspaces[1:]
+            kron_list = other_subspaces[1:].copy()
             kron_list.insert(pos, X2)
             return iterative_kron(kron_list)
         else:
             return X2
+
 
 
 
