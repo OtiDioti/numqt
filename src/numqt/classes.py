@@ -345,6 +345,7 @@ class Mesh:
 # Canonic Operators
 # ----------------------------------------------------------
 # ----------------------------------------------------------
+
 class canonic_ops:
     def __init__(self, mesh, additional_subspaces=None, hbar=1):
         """
@@ -367,7 +368,7 @@ class canonic_ops:
         self.dim = mesh.dims
         self.additional_subspaces = additional_subspaces
 
-        # Get the grid(s) from the mesh and compute interior point count.
+        # Get the grid(s) from the mesh and compute the number of interior points.
         if self.dim == 1:
             self.mesh_x = mesh.get_grids()  # expected 1D array
             self.Nx = len(self.mesh_x) - 2
@@ -388,11 +389,7 @@ class canonic_ops:
         if self.dim == 3:
             self.Iz = eye(self.Nz, format='csr')
 
-        # For now, the additional_subspaces functionality is preserved but its
-        # structure should be clarified by the user. The tensor product embedding
-        # is handled in the operator functions if additional_subspaces is provided.
-
-        # Generate operators for each dimension.
+        # Generate operators for each coordinate direction.
         if self.dim == 1:
             self.px    = self.p(self.mesh_x)
             self.px2   = self.p2(self.mesh_x)
@@ -451,7 +448,7 @@ class canonic_ops:
             }
         return ops
 
-    def p(self, mesh, other_subspaces=None):
+    def p(self, mesh):
         """
         Constructs the discretized momentum operator (p = -i*hbar*d/dx) using a 7-point
         central difference stencil (6th-order accurate) on a uniform grid.
@@ -464,33 +461,27 @@ class canonic_ops:
             If provided, should be of the form [position, I2, I3, ...] and the operator will be
             embedded in the tensor product via iterative_kron.
         """
-        # Compute grid spacing (assumes uniform spacing)
         dx = np.abs(mesh[1] - mesh[0])
         N = len(mesh) - 2  # only use interior points
-        
-        # Define offsets and coefficients for the 7-point central difference
+
         offsets = np.array([-3, -2, -1, 1, 2, 3])
         coeffs = np.array([1, -9, 45, -45, 9, -1], dtype=complex)
         prefactor = -1j * self.hbar / (60 * dx)
-        
-        # Build the diagonals for the sparse matrix
         diagonals = [
             prefactor * coeff * np.ones(N - abs(offset), dtype=complex)
             for offset, coeff in zip(offsets, coeffs)
         ]
-        
-        # Construct the momentum operator matrix
         p_mat = diags(diagonals, offsets, shape=(N, N), format='csr')
-        
-        if other_subspaces is not None:
-            pos = other_subspaces[0]
-            kron_list = other_subspaces[1:].copy()
+
+        if self.additional_subspaces is not None:
+            pos = self.additional_subspaces[0]
+            kron_list = self.additional_subspaces[1:].copy()
             kron_list.insert(pos, p_mat)
             return iterative_kron(kron_list)
         else:
             return p_mat
 
-    def p2(self, mesh, other_subspaces=None):
+    def p2(self, mesh):
         """
         Constructs the discretized squared momentum operator (p² = -ħ² d²/dx²)
         using a 7-point central difference stencil (6th-order accurate) on a uniform grid.
@@ -505,29 +496,27 @@ class canonic_ops:
         """
         dx = np.abs(mesh[1] - mesh[0])
         N = len(mesh) - 2  # interior points only
-        
+
         offsets = np.array([-3, -2, -1, 0, 1, 2, 3])
         coeffs = np.array([-1, 12, -39, 56, -39, 12, -1], dtype=float)
         prefactor = -self.hbar**2 / (180 * dx**2)
-        
         diagonals = [
             prefactor * coeff * np.ones(N - abs(offset), dtype=float)
             for offset, coeff in zip(offsets, coeffs)
         ]
-        
         p2_mat = diags(diagonals, offsets, shape=(N, N), format='csr')
-        
-        if other_subspaces is not None:
-            pos = other_subspaces[0]
-            kron_list = other_subspaces[1:].copy()
+
+        if self.additional_subspaces is not None:
+            pos = self.additional_subspaces[0]
+            kron_list = self.additional_subspaces[1:].copy()
             kron_list.insert(pos, p2_mat)
             return iterative_kron(kron_list)
         else:
             return p2_mat
 
-    def x(self, mesh, other_subspaces=None):
+    def x(self, mesh):
         """
-        Constructs the discretized position operator on a uniform mesh
+        Constructs the discretized position operator on a nonuniform mesh
         (defined on interior points only).
 
         Parameters
@@ -538,21 +527,20 @@ class canonic_ops:
             If provided, should be of the form [position, I2, I3, ...] to embed the operator
             into a tensor product space.
         """
-        # Only use interior points.
         x_interior = mesh[1:-1]
         X = diags(x_interior, 0, format='csr')
-        
-        if other_subspaces is not None:
-            pos = other_subspaces[0]
-            kron_list = other_subspaces[1:].copy()
+
+        if self.additional_subspaces is not None:
+            pos = self.additional_subspaces[0]
+            kron_list = self.additional_subspaces[1:].copy()
             kron_list.insert(pos, X)
             return iterative_kron(kron_list)
         else:
             return X
 
-    def x2(self, mesh, other_subspaces=None):
+    def x2(self, mesh):
         """
-        Constructs the discretized x² operator on a uniform mesh.
+        Constructs the discretized x² operator on a nonuniform mesh.
 
         Parameters
         ----------
@@ -564,19 +552,328 @@ class canonic_ops:
         """
         x_interior = mesh[1:-1]
         X2 = diags(x_interior**2, 0, format='csr')
-        
-        if other_subspaces is not None:
-            pos = other_subspaces[0]
-            kron_list = other_subspaces[1:].copy()
+
+        if self.additional_subspaces is not None:
+            pos = self.additional_subspaces[0]
+            kron_list = self.additional_subspaces[1:].copy()
             kron_list.insert(pos, X2)
             return iterative_kron(kron_list)
         else:
             return X2
 
+    def project(self, basis):
+        """
+        Projects the canonical operators (position, momentum, and their squares) onto a new basis set.
+        
+        For 1D, the `basis` parameter should be a tuple:
+            (fn, x0, x1, dx, N)
+        For 2D or 3D, `basis` can be provided either as:
+            - A single tuple, in which case the same basis is used for all directions, or
+            - A dictionary with keys "x", "y", (and "z") where each value is a tuple
+              (fn, x0, x1, dx, N) for the corresponding direction.
+              
+        The projection is performed using the provided functions:
+          - p(fn, x0, x1, dx, N, sparse)
+          - p2(fn, x0, x1, dx, N, sparse)
+          - x(fn, x0, x1, dx, N, sparse)
+          - x2(fn, x0, x1, dx, N, sparse)
+        
+        These functions are assumed to be defined in the global scope.
+        The projected operators are computed via discretized integration and are always returned as sparse matrices.
+        
+        Parameters
+        ----------
+        basis : tuple or dict
+            Basis information. Either a single tuple (fn, x0, x1, dx, N) to be used for all directions,
+            or a dict with keys "x", "y", (and "z") for higher dimensions.
+        
+        Returns
+        -------
+        dict
+            A dictionary of projected operators. For 1D:
+                {"p": p_proj, "p2": p2_proj, "x": x_proj, "x2": x2_proj}
+            For 2D:
+                {"p": [p_x_proj, p_y_proj],
+                 "p2": [p2_x_proj, p2_y_proj],
+                 "x": [x_x_proj, x_y_proj],
+                 "x2": [x2_x_proj, x2_y_proj]}
+            For 3D, similarly with an entry for z.
+        """
+        # Helper to extract basis info for a given direction.
+        # If basis is a tuple, then use it for all directions.
+        def get_basis(direction):
+            if isinstance(basis, dict):
+                return basis.get(direction)
+            else:
+                return basis
+
+        # For each direction, retrieve the basis info.
+        if self.dim == 1:
+            basis_x = get_basis("x")
+            # Unpack basis info: (fn, x0, x1, dx, N)
+            fn_x, x0_x, x1_x, dx_x, N_x = basis_x
+            p_proj  = self.project_p(self.px, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
+            p2_proj = self.project_p2(self.px2, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
+            x_proj  = self.project_x(self.x, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
+            x2_proj = self.project_x2(self.x2, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
+            proj_ops = {"p": p_proj, "p2": p2_proj, "x": x_proj, "x2": x2_proj}
+
+        elif self.dim == 2:
+            basis_x = get_basis("x")
+            basis_y = get_basis("y")
+            # If basis_y is None, use basis_x for both directions.
+            if basis_y is None:
+                basis_y = basis_x
+
+            fn_x, x0_x, x1_x, dx_x, N_x = basis_x
+            fn_y, x0_y, x1_y, dx_y, N_y = basis_y
+
+            p_proj_x  = self.project_p(self.px, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
+            p_proj_y  = self.project_p(self.py, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
+            p2_proj_x = self.project_p2(self.px2, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
+            p2_proj_y = self.project_p2(self.py2, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
+            x_proj_x  = self.project_x(self.x, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
+            x_proj_y  = self.project_x(self.y, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
+            x2_proj_x = self.project_x2(self.x2, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
+            x2_proj_y = self.project_x2(self.y2, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
+
+            proj_ops = {
+                "p":  [p_proj_x, p_proj_y],
+                "p2": [p2_proj_x, p2_proj_y],
+                "x":  [x_proj_x, x_proj_y],
+                "x2": [x2_proj_x, x2_proj_y]
+            }
+
+        elif self.dim == 3:
+            basis_x = get_basis("x")
+            basis_y = get_basis("y")
+            basis_z = get_basis("z")
+            if basis_y is None:
+                basis_y = basis_x
+            if basis_z is None:
+                basis_z = basis_x
+
+            fn_x, x0_x, x1_x, dx_x, N_x = basis_x
+            fn_y, x0_y, x1_y, dx_y, N_y = basis_y
+            fn_z, x0_z, x1_z, dx_z, N_z = basis_z
+            
+            p_proj_x  = self.project_p(self.px, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
+            p_proj_y  = self.project_p(self.py, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
+            p_proj_z  = self.project_p(self.pz, fn_z, x0_z, x1_z, dx_z, N_z, sparse=sparse)
+            p2_proj_x = self.project_p2(self.px2, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
+            p2_proj_y = self.project_p2(self.py2, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
+            p2_proj_z = self.project_p2(self.pz2, fn_z, x0_z, x1_z, dx_z, N_z, sparse=sparse)
+            x_proj_x  = self.project_x(self.x, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
+            x_proj_y  = self.project_x(self.y, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
+            x_proj_z  = self.project_x(self.z, fn_z, x0_z, x1_z, dx_z, N_z, sparse=sparse)
+            x2_proj_x = self.project_x2(self.x2, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
+            x2_proj_y = self.project_x2(self.y2, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
+            x2_proj_z = self.project_x2(self.z2, fn_z, x0_z, x1_z, dx_z, N_z, sparse=sparse)
+
+            proj_ops = {
+                "p":  [p_proj_x, p_proj_y, p_proj_z],
+                "p2": [p2_proj_x, p2_proj_y, p2_proj_z],
+                "x":  [x_proj_x, x_proj_y, x_proj_z],
+                "x2": [x2_proj_x, x2_proj_y, x2_proj_z]
+            }
+        else:
+            raise ValueError("Unsupported dimension: {}".format(self.dim))
+
+        return proj_ops
 
 
 
+    
+    def project_p(self, p_matrix, fn, x0, x1, dx, N, sparse=True):
+        """
+        Compute the matrix representation of the momentum operator in an eigenstate basis.
+    
+        This function projects the momentum operator (defined in the position basis using a 7-point
+        central difference scheme) onto an eigenstate basis. The momentum operator in the position basis is:
+        
+        .. math::
+            \hat{p} = -i \frac{d}{dx} \quad (\hbar = 1)
+    
+        and its 7-point discretization is given by:
+        
+        .. math::
+            f'(x) \approx \frac{1}{60h} \left[f(x-3h) - 9f(x-2h) + 45f(x-h) - 45f(x+h) + 9f(x+2h) - f(x+3h)\right].
+    
+        The matrix elements in the eigenbasis are computed as:
+        
+        .. math::
+            P_{mn} = dx \sum_{j} \psi_m^*(x_j) \left[\hat{p}\,\psi_n\right](x_j)
+    
+        where :math:`\psi_n(x)` is the discretized eigenstate given by ``fn(n, x0, x1, dx)``.
+    
+        Parameters
+        ----------
+        fn : callable
+            Function that returns the discretized eigenstate for a given index.
+            It should accept parameters (n, x0, x1, dx) and return a 1D NumPy array.
+        x0 : float
+            Lower bound of the spatial domain.
+        x1 : float
+            Upper bound of the spatial domain.
+        dx : float
+            Grid spacing.
+        N : int
+            Number of eigenstates (and the dimension of the discretized position space).
+        sparse : bool, optional
+            If True, the underlying momentum operator in the position basis is constructed as a sparse matrix.
+            Default is False.
+    
+        Returns
+        -------
+        numpy.ndarray or scipy.sparse.spmatrix
+            An (N × N) complex matrix representing the momentum operator in the eigenstate basis.
+        """
+        
+        # Precompute the eigenstate basis.
+        # Each column of Psi corresponds to an eigenstate (assumed discretized on the same grid).
+        Psi = np.array([fn(n, x0, x1, dx) for n in range(N)]).T  # Shape: (grid_points, N)
+        
+        # Compute the matrix elements via discretized integration (using dx as weight).
+        p_mat = dx * Psi.conjugate().T @ (p_matrix @ Psi)
+        return p_mat
+    
+    def project_p2(self, p2_matrix, fn, x0, x1, dx, N, sparse=True):
+        """
+        Compute the matrix representation of the momentum-squared operator in an eigenstate basis.
+    
+        This function projects the momentum-squared operator (constructed in the position basis using a 7-point
+        central difference scheme) onto an eigenstate basis. The momentum-squared operator is defined as:
+        
+        .. math::
+            \hat{p}^2 = -\frac{d^2}{dx^2} \quad (\hbar = 1)
+    
+        with its 7-point discretization given by:
+        
+        .. math::
+            f''(x) \approx \frac{1}{180h^2} \left[-f(x-3h) + 12f(x-2h) - 39f(x-h) + 56f(x) - 39f(x+h) + 12f(x+2h) - f(x+3h)\right].
+    
+        The matrix elements are computed as:
+        
+        .. math::
+            (P^2)_{mn} = dx \sum_{j} \psi_m^*(x_j) \left[\hat{p}^2\,\psi_n\right](x_j)
+    
+        Parameters
+        ----------
+        fn : callable
+            Function that returns the discretized eigenstate for a given index.
+        x0 : float
+            Lower bound of the spatial domain.
+        x1 : float
+            Upper bound of the spatial domain.
+        dx : float
+            Grid spacing.
+        N : int
+            Number of eigenstates (and the dimension of the discretized position space).
+        sparse : bool, optional
+            If True, the underlying momentum-squared operator is constructed as a sparse matrix.
+            Default is False.
+    
+        Returns
+        -------
+        numpy.ndarray or scipy.sparse.spmatrix
+            An (N × N) matrix representing the momentum-squared operator in the eigenstate basis.
+        """
+        
+        # Precompute the eigenstate basis.
+        Psi = np.array([fn(n, x0, x1, dx) for n in range(N)]).T
+        
+        # Compute the matrix elements via discretized integration.
+        p2_mat = dx * Psi.conjugate().T @ (p2_matrix @ Psi)
+        return p2_mat
+    
+    def project_x(self, x_matrix, fn, x0, x1, dx, N, sparse=True):
+        """
+        Compute the matrix representation of the position operator in an eigenstate basis.
+    
+        The position operator in the position basis is diagonal with entries corresponding to the spatial
+        grid points. This function projects the operator onto the eigenstate basis using:
+        
+        .. math::
+            X_{mn} = dx \sum_{j} \psi_m^*(x_j)\, x_j\, \psi_n(x_j)
+    
+        Parameters
+        ----------
+        fn : callable
+            Function that returns the discretized eigenstate for a given index.
+        x0 : float
+            Lower bound of the spatial domain.
+        x1 : float
+            Upper bound of the spatial domain.
+        dx : float
+            Grid spacing.
+        N : int
+            Number of eigenstates (and the dimension of the discretized position space).
+        sparse : bool, optional
+            If True, the underlying position operator is constructed as a sparse diagonal matrix.
+            Default is False.
+    
+        Returns
+        -------
+        numpy.ndarray or scipy.sparse.spmatrix
+            An (N × N) matrix representing the position operator in the eigenstate basis.
+        """
+         
+        # Precompute the eigenstate basis.
+        Psi = np.array([fn(n, x0, x1, dx) for n in range(N)]).T
+        
+        # Compute the matrix elements via discretized integration.
+        x_mat = dx * Psi.conjugate().T @ (x_matrix @ Psi)
+        return x_mat
+    
+    def project_x2(self, x2_matrix, fn, x0, x1, dx, N, sparse=True):
+        """
+        Compute the matrix representation of the squared position operator in an eigenstate basis.
+    
+        This function projects the squared position operator, defined in the position basis as
+        :math:`\hat{x}^2`, onto an eigenstate basis. The operator in the position basis is given by:
+    
+        .. math::
+            (\hat{x}^2)_{ij} = x_i^2 \, \delta_{ij},
+    
+        where the grid points :math:`x_i` are defined on the interval (x0, x1) with spacing `dx`.
+        The matrix elements in the eigenbasis are computed as:
+    
+        .. math::
+            (X^2)_{mn} = dx \sum_{j} \psi_m^*(x_j) \, x_j^2 \, \psi_n(x_j)
+    
+        where :math:`\psi_n(x)` is the discretized eigenstate provided by ``fn(n, x0, x1, dx)``.
+    
+        Parameters
+        ----------
+        fn : callable
+            Function that returns the discretized eigenstate for a given index.
+            It should accept parameters (n, x0, x1, dx) and return a 1D NumPy array.
+        x0 : float
+            Lower bound of the spatial domain.
+        x1 : float
+            Upper bound of the spatial domain.
+        dx : float
+            Grid spacing between adjacent points.
+        N : int
+            Number of eigenstates (and the dimension of the discretized position space).
+        sparse : bool, optional
+            If True, the underlying squared position operator in the position basis is constructed as a sparse matrix.
+            Default is False.
+    
+        Returns
+        -------
+        numpy.ndarray or scipy.sparse.spmatrix
+            An (N × N) matrix representing the squared position operator in the eigenstate basis.
+        """
 
+        
+        # Precompute the eigenstate basis.
+        # Each column corresponds to an eigenstate (discretized on the same grid).
+        Psi = np.array([fn(n, x0, x1, dx) for n in range(N)]).T  # Shape: (grid_points, N)
+        
+        # Compute the matrix elements via discretized integration.
+        x2_mat = dx * Psi.conjugate().T @ (x2_matrix @ Psi)
+        return x2_mat
 
 
 
