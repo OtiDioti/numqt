@@ -20,8 +20,9 @@ def iterative_kron(listt:list):
     # Kronecker product
      op = listt[0]
      for f in listt[1:]:
-         op = kron(op, f)
+         op = kron(op, f, format='csr')
      return op
+
 
 def a_comm(a,b):
     """
