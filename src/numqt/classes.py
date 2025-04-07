@@ -612,10 +612,10 @@ class canonic_ops:
             basis_x = get_basis("x")
             # Unpack basis info: (fn, x0, x1, dx, N)
             fn_x, x0_x, x1_x, dx_x, N_x = basis_x
-            p_proj  = self.project_p(self.px, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
-            p2_proj = self.project_p2(self.px2, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
-            x_proj  = self.project_x(self.x, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
-            x2_proj = self.project_x2(self.x2, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
+            p_proj  = self.project_p(self.px, fn_x, x0_x, x1_x, dx_x, N_x)
+            p2_proj = self.project_p2(self.px2, fn_x, x0_x, x1_x, dx_x, N_x)
+            x_proj  = self.project_x(self.x, fn_x, x0_x, x1_x, dx_x, N_x)
+            x2_proj = self.project_x2(self.x2, fn_x, x0_x, x1_x, dx_x, N_x)
             proj_ops = {"p": p_proj, "p2": p2_proj, "x": x_proj, "x2": x2_proj}
 
         elif self.dim == 2:
@@ -628,14 +628,14 @@ class canonic_ops:
             fn_x, x0_x, x1_x, dx_x, N_x = basis_x
             fn_y, x0_y, x1_y, dx_y, N_y = basis_y
 
-            p_proj_x  = self.project_p(self.px, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
-            p_proj_y  = self.project_p(self.py, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
-            p2_proj_x = self.project_p2(self.px2, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
-            p2_proj_y = self.project_p2(self.py2, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
-            x_proj_x  = self.project_x(self.x, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
-            x_proj_y  = self.project_x(self.y, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
-            x2_proj_x = self.project_x2(self.x2, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
-            x2_proj_y = self.project_x2(self.y2, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
+            p_proj_x  = self.project_p(self.px, fn_x, x0_x, x1_x, dx_x, N_x)
+            p_proj_y  = self.project_p(self.py, fn_y, x0_y, x1_y, dx_y, N_y)
+            p2_proj_x = self.project_p2(self.px2, fn_x, x0_x, x1_x, dx_x, N_x)
+            p2_proj_y = self.project_p2(self.py2, fn_y, x0_y, x1_y, dx_y, N_y)
+            x_proj_x  = self.project_x(self.x, fn_x, x0_x, x1_x, dx_x, N_x)
+            x_proj_y  = self.project_x(self.y, fn_y, x0_y, x1_y, dx_y, N_y)
+            x2_proj_x = self.project_x2(self.x2, fn_x, x0_x, x1_x, dx_x, N_x)
+            x2_proj_y = self.project_x2(self.y2, fn_y, x0_y, x1_y, dx_y, N_y)
 
             proj_ops = {
                 "p":  [p_proj_x, p_proj_y],
@@ -657,18 +657,18 @@ class canonic_ops:
             fn_y, x0_y, x1_y, dx_y, N_y = basis_y
             fn_z, x0_z, x1_z, dx_z, N_z = basis_z
             
-            p_proj_x  = self.project_p(self.px, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
-            p_proj_y  = self.project_p(self.py, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
-            p_proj_z  = self.project_p(self.pz, fn_z, x0_z, x1_z, dx_z, N_z, sparse=sparse)
-            p2_proj_x = self.project_p2(self.px2, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
-            p2_proj_y = self.project_p2(self.py2, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
-            p2_proj_z = self.project_p2(self.pz2, fn_z, x0_z, x1_z, dx_z, N_z, sparse=sparse)
-            x_proj_x  = self.project_x(self.x, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
-            x_proj_y  = self.project_x(self.y, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
-            x_proj_z  = self.project_x(self.z, fn_z, x0_z, x1_z, dx_z, N_z, sparse=sparse)
-            x2_proj_x = self.project_x2(self.x2, fn_x, x0_x, x1_x, dx_x, N_x, sparse=sparse)
-            x2_proj_y = self.project_x2(self.y2, fn_y, x0_y, x1_y, dx_y, N_y, sparse=sparse)
-            x2_proj_z = self.project_x2(self.z2, fn_z, x0_z, x1_z, dx_z, N_z, sparse=sparse)
+            p_proj_x  = self.project_p(self.px, fn_x, x0_x, x1_x, dx_x, N_x)
+            p_proj_y  = self.project_p(self.py, fn_y, x0_y, x1_y, dx_y, N_y)
+            p_proj_z  = self.project_p(self.pz, fn_z, x0_z, x1_z, dx_z, N_z)
+            p2_proj_x = self.project_p2(self.px2, fn_x, x0_x, x1_x, dx_x, N_x)
+            p2_proj_y = self.project_p2(self.py2, fn_y, x0_y, x1_y, dx_y, N_y)
+            p2_proj_z = self.project_p2(self.pz2, fn_z, x0_z, x1_z, dx_z, N_z)
+            x_proj_x  = self.project_x(self.x, fn_x, x0_x, x1_x, dx_x, N_x)
+            x_proj_y  = self.project_x(self.y, fn_y, x0_y, x1_y, dx_y, N_y)
+            x_proj_z  = self.project_x(self.z, fn_z, x0_z, x1_z, dx_z, N_z)
+            x2_proj_x = self.project_x2(self.x2, fn_x, x0_x, x1_x, dx_x, N_x)
+            x2_proj_y = self.project_x2(self.y2, fn_y, x0_y, x1_y, dx_y, N_y)
+            x2_proj_z = self.project_x2(self.z2, fn_z, x0_z, x1_z, dx_z, N_z)
 
             proj_ops = {
                 "p":  [p_proj_x, p_proj_y, p_proj_z],
@@ -684,7 +684,7 @@ class canonic_ops:
 
 
     
-    def project_p(self, p_matrix, fn, x0, x1, dx, N, sparse=True):
+    def project_p(self, p_matrix, fn, x0, x1, dx, N):
         """
         Compute the matrix representation of the momentum operator in an eigenstate basis.
     
@@ -719,9 +719,6 @@ class canonic_ops:
             Grid spacing.
         N : int
             Number of eigenstates (and the dimension of the discretized position space).
-        sparse : bool, optional
-            If True, the underlying momentum operator in the position basis is constructed as a sparse matrix.
-            Default is False.
     
         Returns
         -------
@@ -737,7 +734,7 @@ class canonic_ops:
         p_mat = dx * Psi.conjugate().T @ (p_matrix @ Psi)
         return p_mat
     
-    def project_p2(self, p2_matrix, fn, x0, x1, dx, N, sparse=True):
+    def project_p2(self, p2_matrix, fn, x0, x1, dx, N):
         """
         Compute the matrix representation of the momentum-squared operator in an eigenstate basis.
     
@@ -769,9 +766,7 @@ class canonic_ops:
             Grid spacing.
         N : int
             Number of eigenstates (and the dimension of the discretized position space).
-        sparse : bool, optional
-            If True, the underlying momentum-squared operator is constructed as a sparse matrix.
-            Default is False.
+    
     
         Returns
         -------
@@ -786,7 +781,7 @@ class canonic_ops:
         p2_mat = dx * Psi.conjugate().T @ (p2_matrix @ Psi)
         return p2_mat
     
-    def project_x(self, x_matrix, fn, x0, x1, dx, N, sparse=True):
+    def project_x(self, x_matrix, fn, x0, x1, dx, N):
         """
         Compute the matrix representation of the position operator in an eigenstate basis.
     
@@ -808,9 +803,6 @@ class canonic_ops:
             Grid spacing.
         N : int
             Number of eigenstates (and the dimension of the discretized position space).
-        sparse : bool, optional
-            If True, the underlying position operator is constructed as a sparse diagonal matrix.
-            Default is False.
     
         Returns
         -------
@@ -825,7 +817,7 @@ class canonic_ops:
         x_mat = dx * Psi.conjugate().T @ (x_matrix @ Psi)
         return x_mat
     
-    def project_x2(self, x2_matrix, fn, x0, x1, dx, N, sparse=True):
+    def project_x2(self, x2_matrix, fn, x0, x1, dx, N):
         """
         Compute the matrix representation of the squared position operator in an eigenstate basis.
     
@@ -856,9 +848,6 @@ class canonic_ops:
             Grid spacing between adjacent points.
         N : int
             Number of eigenstates (and the dimension of the discretized position space).
-        sparse : bool, optional
-            If True, the underlying squared position operator in the position basis is constructed as a sparse matrix.
-            Default is False.
     
         Returns
         -------
