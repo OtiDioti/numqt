@@ -275,53 +275,75 @@ class canonic_ops:
 
         # Get the grid(s) from the mesh and compute the number of interior points.
         if self.dim == 1:
-            self.mesh_x = mesh.get_grids()  # expected 1D array
-            self.Nx = len(self.mesh_x) - 2
+            mesh_x = mesh.get_grids()  # expected 1D array
+            self.Nx = len(mesh_x) - 2
         elif self.dim == 2:
-            self.mesh_x, self.mesh_y = mesh.get_grids()
-            self.Nx = len(self.mesh_x) - 2
-            self.Ny = len(self.mesh_y) - 2
+            mesh_x, mesh_y = mesh.get_grids()
+            self.Nx = len(mesh_x) - 2
+            self.Ny = len(mesh_y) - 2
         elif self.dim == 3:
-            self.mesh_x, self.mesh_y, self.mesh_z = mesh.get_grids()
-            self.Nx = len(self.mesh_x) - 2
-            self.Ny = len(self.mesh_y) - 2
-            self.Nz = len(self.mesh_z) - 2
+            mesh_x, mesh_y, mesh_z = mesh.get_grids()
+            self.Nx = len(mesh_x) - 2
+            self.Ny = len(mesh_y) - 2
+            self.Nz = len(mesh_z) - 2
 
         # Pre-construct identity matrices on the interior grid.
-        self.Ix = eye(self.Nx, format='csr')
+        I_x = eye(self.Nx, format='csr')
         if self.dim >= 2:
-            self.Iy = eye(self.Ny, format='csr')
+            I_y = eye(self.Ny, format='csr')
         if self.dim == 3:
-            self.Iz = eye(self.Nz, format='csr')
-
-        # Generate operators for each coordinate direction.
+            I_z = eye(self.Nz, format='csr')
+        # Set up the "additional subspaces" lists for tensor products.
+ 
+        if additional_subspaces is None:
+            if self.dim == 1:
+                additional_x = [0]
+            elif self.dim == 2:
+                additional_x = [0, I_y]
+                additional_y = [1, I_x]
+            elif self.dim == 3:
+                additional_x = [0, I_y, I_z]
+                additional_y = [1, I_x, I_z]
+                additional_z = [2, I_x, I_y]
+        else:
+            if self.dim == 1:
+                additional_x = [len(additional_subspaces) + 0] + [identity for identity in additional_subspaces]
+            elif self.dim == 2:
+                additional_x = [len(additional_subspaces) + 0] + [identity for identity in additional_subspaces] + [I_y]
+                additional_y = [len(additional_subspaces) + 1] + [identity for identity in additional_subspaces] + [I_x]
+            elif self.dim == 3:
+                additional_x = [len(additional_subspaces) + 0] + [identity for identity in additional_subspaces] + [I_y, I_z]
+                additional_y = [len(additional_subspaces) + 1] + [identity for identity in additional_subspaces] + [I_x, I_z]
+                additional_z = [len(additional_subspaces) + 2] + [identity for identity in additional_subspaces] + [I_x, I_y]
+                
+        # Generate only the operators needed for the given dimensionality.
         if self.dim == 1:
-            self.px    = self.p(self.mesh_x)
-            self.px2   = self.p2(self.mesh_x)
-            self.x_op  = self.x(self.mesh_x)
-            self.x2_op = self.x2(self.mesh_x)
+            self.px    = self.p(mesh_x, additional_x)
+            self.px2   = self.p2(mesh_x, additional_x)
+            self.x_op  = self.x(mesh_x, additional_x)
+            self.x2_op = self.x2(mesh_x, additional_x)
         elif self.dim == 2:
-            self.px    = self.p(self.mesh_x)
-            self.py    = self.p(self.mesh_y)
-            self.px2   = self.p2(self.mesh_x)
-            self.py2   = self.p2(self.mesh_y)
-            self.x_op  = self.x(self.mesh_x)
-            self.y_op  = self.x(self.mesh_y)
-            self.x2_op = self.x2(self.mesh_x)
-            self.y2_op = self.x2(self.mesh_y)
+            self.px    = self.p(mesh_x, additional_x)
+            self.py    = self.p(mesh_y, additional_y)
+            self.px2   = self.p2(mesh_x, additional_x)
+            self.py2   = self.p2(mesh_y, additional_y)
+            self.x_op  = self.x(mesh_x, additional_x)
+            self.y_op  = self.x(mesh_y, additional_y)
+            self.x2_op = self.x2(mesh_x, additional_x)
+            self.y2_op = self.x2(mesh_y, additional_y)
         elif self.dim == 3:
-            self.px    = self.p(self.mesh_x)
-            self.py    = self.p(self.mesh_y)
-            self.pz    = self.p(self.mesh_z)
-            self.px2   = self.p2(self.mesh_x)
-            self.py2   = self.p2(self.mesh_y)
-            self.pz2   = self.p2(self.mesh_z)
-            self.x_op  = self.x(self.mesh_x)
-            self.y_op  = self.x(self.mesh_y)
-            self.z_op  = self.x(self.mesh_z)
-            self.x2_op = self.x2(self.mesh_x)
-            self.y2_op = self.x2(self.mesh_y)
-            self.z2_op = self.x2(self.mesh_z)
+            self.px    = self.p(mesh_x, additional_x)
+            self.py    = self.p(mesh_y, additional_y)
+            self.pz    = self.p(mesh_z, additional_z)
+            self.px2   = self.p2(mesh_x, additional_x)
+            self.py2   = self.p2(mesh_y, additional_y)
+            self.pz2   = self.p2(mesh_z, additional_z)
+            self.x_op  = self.x(mesh_x, additional_x)
+            self.y_op  = self.x(mesh_y, additional_y)
+            self.z_op  = self.x(mesh_z, additional_z)
+            self.x2_op = self.x2(mesh_x, additional_x)
+            self.y2_op = self.x2(mesh_y, additional_y)
+            self.z2_op = self.x2(mesh_z, additional_z)
 
     def get_ops(self):
         """
@@ -353,7 +375,7 @@ class canonic_ops:
             }
         return ops
 
-    def p(self, mesh):
+    def p(self, mesh, additional = None):
         """
         Constructs the discretized momentum operator (p = -i*hbar*d/dx) using a
         2-point central difference stencil (2nd-order accurate) on a uniform grid.
@@ -379,15 +401,15 @@ class canonic_ops:
         ]
         p_mat = diags(diagonals, offsets, shape=(N, N), format='csr')
     
-        if self.additional_subspaces is not None:
-            pos = self.additional_subspaces[0]
-            kron_list = self.additional_subspaces[1:].copy()
+        if additional is not None:
+            pos = additional[0]
+            kron_list = additional[1:].copy()
             kron_list.insert(pos, p_mat)
             return iterative_kron(kron_list)
         else:
             return p_mat
     
-    def p2(self, mesh):
+    def p2(self, mesh, additional=None):
         """
         Constructs the discretized squared momentum operator (p² = -ħ² d²/dx²)
         using a 3-point central difference stencil (2nd-order accurate) on a uniform grid.
@@ -414,15 +436,15 @@ class canonic_ops:
         ]
         p2_mat = diags(diagonals, offsets, shape=(N, N), format='csr')
     
-        if self.additional_subspaces is not None:
-            pos = self.additional_subspaces[0]
-            kron_list = self.additional_subspaces[1:].copy()
+        if additional is not None:
+            pos = additional[0]
+            kron_list = additional[1:].copy()
             kron_list.insert(pos, p2_mat)
             return iterative_kron(kron_list)
         else:
             return p2_mat
     
-    def x(self, mesh):
+    def x(self, mesh, additional=None):
         """
         Constructs the discretized position operator
         (defined on interior points only).
@@ -438,15 +460,15 @@ class canonic_ops:
         x_interior = mesh[1:-1]
         X = diags(x_interior, 0, format='csr')
     
-        if self.additional_subspaces is not None:
-            pos = self.additional_subspaces[0]
-            kron_list = self.additional_subspaces[1:].copy()
+        if additional is not None:
+            pos = additional[0]
+            kron_list = additional[1:].copy()
             kron_list.insert(pos, X)
             return iterative_kron(kron_list)
         else:
             return X
     
-    def x2(self, mesh):
+    def x2(self, mesh, additional=None):
         """
         Constructs the discretized x² operator.
     
@@ -461,9 +483,9 @@ class canonic_ops:
         x_interior = mesh[1:-1]
         X2 = diags(x_interior**2, 0, format='csr')
     
-        if self.additional_subspaces is not None:
-            pos = self.additional_subspaces[0]
-            kron_list = self.additional_subspaces[1:].copy()
+        if additional is not None:
+            pos = additional[0]
+            kron_list = additional[1:].copy()
             kron_list.insert(pos, X2)
             return iterative_kron(kron_list)
         else:
@@ -588,13 +610,10 @@ class canonic_ops:
 
         return proj_ops
 
-
-
-    
     def project_p(self, p_matrix, fn, x0, x1, dx, N):
         """
         Compute the matrix representation of the momentum operator in an eigenstate basis.
-    
+        
         This function projects the momentum operator (defined in the position basis using a 7-point
         central difference scheme) onto an eigenstate basis. The momentum operator in the position basis is:
         
