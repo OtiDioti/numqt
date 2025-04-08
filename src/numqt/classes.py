@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 from scipy.sparse.linalg import eigsh
 from mpl_toolkits.mplot3d import Axes3D
 from scipy.integrate import quad
-from scipy.sparse import lil_matrix
+from scipy.sparse import lil_matrix, csr_matrix
 from concurrent.futures import ThreadPoolExecutor
 
         
@@ -581,131 +581,173 @@ class canonic_ops:
     # --- Methods for direct computation of matrix elements via numerical integration ---
     def compute_p_matrix(self, fn, mesh, N):
         """
-        Computes the momentum operator matrix elements directly through numerical integration:
-        <m|p|n> = -i*ħ∫ψ_m*(x)·(d/dx ψ_n(x)) dx
+        Computes the momentum operator matrix elements:
+          <m|p|n> = -i ħ ∫ ψ_m*(x) [d/dx ψ_n(x)] dx
+        Only computes integrals for m <= n, then fills in the lower-triangle via Hermitian conjugation.
+        The integrations are processed in chunks to reduce overhead.
         """
-  
         x_min = mesh[0]
         x_max = mesh[-1]
-        p_matrix = lil_matrix((N, N), dtype=complex)
         quad_options = {
-            'limit': self.limit_divisions if self.limit_divisions else (N + int(0.1 * N)),
+            'limit': self.limit_divisions if self.limit_divisions else max((N + int(0.1 * N)),50),
             'epsabs': 1.49e-6,
             'epsrel': 1.49e-6
         }
 
-        def integrate_element(pair):
-            m, n = pair
-            def integrand(x):
-                psi_m, _, _ = fn(m, x)
-                _, dpsi_n, _ = fn(n, x)
-                return np.conj(psi_m) * dpsi_n
-            result, _ = quad(integrand, x_min, x_max, **quad_options)
-            if abs(result) <= 1e-10:
-                result = 0
-            return (m, n, -1j * self.hbar * result)
+        # Build list of index pairs (m, n) with m <= n.
+        pairs = [(m, n) for m in range(N) for n in range(m, N)]
+        chunk_size = 20  # Tune this parameter as needed.
+        chunks = [pairs[i:i+chunk_size] for i in range(0, len(pairs), chunk_size)]
+        
+        def process_chunk(chunk):
+            results = []
+            for (m, n) in chunk:
+                # Define the integrand for the (m, n) element.
+                def integrand(x):
+                    psi_m, _, _ = fn(m, x)
+                    _, dpsi_n, _ = fn(n, x)
+                    return np.conj(psi_m) * dpsi_n
+                val, _ = quad(integrand, x_min, x_max, **quad_options)
+                results.append((m, n, -1j * self.hbar * val))
+            return results
 
-        tasks = [(m, n) for m in range(N) for n in range(N)]
+        all_results = []
         with ThreadPoolExecutor() as executor:
-            for m, n, value in executor.map(integrate_element, tasks):
-                p_matrix[m, n] = value
-        return p_matrix.tocsr()
+            for chunk_results in executor.map(process_chunk, chunks):
+                all_results.extend(chunk_results)
+
+        # Fill a sparse matrix with computed values.
+        p_mat = lil_matrix((N, N), dtype=complex)
+        for (m, n, value) in all_results:
+            p_mat[m, n] = value
+            if m != n:  # Use Hermitian property: A_nm = conj(A_mn)
+                p_mat[n, m] = np.conj(value)
+        return p_mat.tocsr()
 
     def compute_p2_matrix(self, fn, mesh, N):
         """
-        Computes the squared momentum operator matrix elements directly through numerical integration:
-        <m|p²|n> = -ħ²∫ψ_m*(x)·(d²/dx² ψ_n(x)) dx
+        Computes the squared momentum operator matrix elements:
+          <m|p²|n> = -ħ² ∫ ψ_m*(x) [d²/dx² ψ_n(x)] dx
+        Only computes for m <= n, and fills in the rest by Hermitian conjugation.
+        Integrals are grouped in chunks.
         """
-
         x_min = mesh[0]
         x_max = mesh[-1]
-        p2_matrix = lil_matrix((N, N), dtype=complex)
         quad_options = {
-            'limit': self.limit_divisions if self.limit_divisions else (N + int(0.1 * N)),
+            'limit': self.limit_divisions if self.limit_divisions else max((N + int(0.1 * N)),50),
             'epsabs': 1.49e-6,
             'epsrel': 1.49e-6
         }
 
-        def integrate_element(pair):
-            m, n = pair
-            def integrand(x):
-                psi_m, _, _ = fn(m, x)
-                _, _, d2psi_n = fn(n, x)
-                return np.conj(psi_m) * d2psi_n
-            result, _ = quad(integrand, x_min, x_max, **quad_options)
-            if abs(result) <= 1e-10:
-                result = 0
-            return (m, n, -self.hbar**2 * result)
+        pairs = [(m, n) for m in range(N) for n in range(m, N)]
+        chunk_size = 20
+        chunks = [pairs[i:i+chunk_size] for i in range(0, len(pairs), chunk_size)]
+        
+        def process_chunk(chunk):
+            results = []
+            for (m, n) in chunk:
+                def integrand(x):
+                    psi_m, _, _ = fn(m, x)
+                    # Extract second derivative from fn(n, x)
+                    _, _, d2psi_n = fn(n, x)
+                    return np.conj(psi_m) * d2psi_n
+                val, _ = quad(integrand, x_min, x_max, **quad_options)
+                results.append((m, n, - (self.hbar ** 2) * val))
+            return results
 
-        tasks = [(m, n) for m in range(N) for n in range(N)]
+        all_results = []
         with ThreadPoolExecutor() as executor:
-            for m, n, value in executor.map(integrate_element, tasks):
-                p2_matrix[m, n] = value
-        return p2_matrix.tocsr()
+            for chunk_results in executor.map(process_chunk, chunks):
+                all_results.extend(chunk_results)
+
+        p2_mat = lil_matrix((N, N), dtype=complex)
+        for (m, n, value) in all_results:
+            p2_mat[m, n] = value
+            if m != n:
+                p2_mat[n, m] = np.conj(value)
+        return p2_mat.tocsr()
 
     def compute_x_matrix(self, fn, mesh, N):
         """
-        Computes the position operator matrix elements directly through numerical integration:
-        <m|x|n> = ∫ψ_m*(x)·x·ψ_n(x) dx
+        Computes the position operator matrix elements:
+          <m|x|n> = ∫ ψ_m*(x) x ψ_n(x) dx
+        Uses chunked integration for m <= n and fills lower-triangle via Hermitian symmetry.
         """
-
         x_min = mesh[0]
         x_max = mesh[-1]
-        x_matrix = lil_matrix((N, N), dtype=complex)
-        quad_options = {'limit': self.limit_divisions, 'epsabs': 1.49e-6, 'epsrel': 1.49e-6}
-
-        def integrate_element(pair):
-            m, n = pair
-            def integrand(x):
-                psi_m, _, _ = fn(m, x)
-                psi_n, _, _ = fn(n, x)
-                return np.conj(psi_m) * x * psi_n
-            result, _ = quad(integrand, x_min, x_max, **quad_options)
-            if abs(result) <= 1e-10:
-                result = 0
-            return (m, n, result)
-
-        tasks = [(m, n) for m in range(N) for n in range(N)]
-        with ThreadPoolExecutor() as executor:
-            for m, n, value in executor.map(integrate_element, tasks):
-                x_matrix[m, n] = value
-        return x_matrix.tocsr()
-
-    def compute_x2_matrix(self, fn, mesh, N):
-        """
-        Computes the squared position operator matrix elements directly through numerical integration:
-        <m|x²|n> = ∫ψ_m*(x)·x²·ψ_n(x) dx
-        """
-        from scipy.sparse import lil_matrix
-        from scipy.integrate import quad
-        import numpy as np
-        from concurrent.futures import ThreadPoolExecutor
-
-        x_min = mesh[0]
-        x_max = mesh[-1]
-        x2_matrix = lil_matrix((N, N), dtype=complex)
         quad_options = {
-            'limit': self.limit_divisions if self.limit_divisions else (N + int(0.1 * N)),
+            'limit': self.limit_divisions if self.limit_divisions else max((N + int(0.1 * N)),50),
             'epsabs': 1.49e-6,
             'epsrel': 1.49e-6
         }
 
-        def integrate_element(pair):
-            m, n = pair
-            def integrand(x):
-                psi_m, _, _ = fn(m, x)
-                psi_n, _, _ = fn(n, x)
-                return np.conj(psi_m) * (x**2) * psi_n
-            result, _ = quad(integrand, x_min, x_max, **quad_options)
-            if abs(result) <= 1e-10:
-                result = 0
-            return (m, n, result)
+        pairs = [(m, n) for m in range(N) for n in range(m, N)]
+        chunk_size = 20
+        chunks = [pairs[i:i+chunk_size] for i in range(0, len(pairs), chunk_size)]
+        
+        def process_chunk(chunk):
+            results = []
+            for (m, n) in chunk:
+                def integrand(x):
+                    psi_m, _, _ = fn(m, x)
+                    psi_n, _, _ = fn(n, x)
+                    return np.conj(psi_m) * x * psi_n
+                val, _ = quad(integrand, x_min, x_max, **quad_options)
+                results.append((m, n, val))
+            return results
 
-        tasks = [(m, n) for m in range(N) for n in range(N)]
+        all_results = []
         with ThreadPoolExecutor() as executor:
-            for m, n, value in executor.map(integrate_element, tasks):
-                x2_matrix[m, n] = value
-        return x2_matrix.tocsr()
+            for chunk_results in executor.map(process_chunk, chunks):
+                all_results.extend(chunk_results)
+
+        x_mat = lil_matrix((N, N), dtype=complex)
+        for (m, n, value) in all_results:
+            x_mat[m, n] = value
+            if m != n:
+                x_mat[n, m] = np.conj(value)
+        return x_mat.tocsr()
+
+    def compute_x2_matrix(self, fn, mesh, N):
+        """
+        Computes the squared position operator matrix elements:
+          <m|x²|n> = ∫ ψ_m*(x) x² ψ_n(x) dx
+        Only computes for m <= n, and fills the lower-triangle using Hermitian symmetry.
+        """
+        x_min = mesh[0]
+        x_max = mesh[-1]
+        quad_options = {
+            'limit': self.limit_divisions if self.limit_divisions else max((N + int(0.1 * N)),50),
+            'epsabs': 1.49e-6,
+            'epsrel': 1.49e-6
+        }
+
+        pairs = [(m, n) for m in range(N) for n in range(m, N)]
+        chunk_size = 20
+        chunks = [pairs[i:i+chunk_size] for i in range(0, len(pairs), chunk_size)]
+        
+        def process_chunk(chunk):
+            results = []
+            for (m, n) in chunk:
+                def integrand(x):
+                    psi_m, _, _ = fn(m, x)
+                    psi_n, _, _ = fn(n, x)
+                    return np.conj(psi_m) * (x ** 2) * psi_n
+                val, _ = quad(integrand, x_min, x_max, **quad_options)
+                results.append((m, n, val))
+            return results
+
+        all_results = []
+        with ThreadPoolExecutor() as executor:
+            for chunk_results in executor.map(process_chunk, chunks):
+                all_results.extend(chunk_results)
+
+        x2_mat = lil_matrix((N, N), dtype=complex)
+        for (m, n, value) in all_results:
+            x2_mat[m, n] = value
+            if m != n:
+                x2_mat[n, m] = np.conj(value)
+        return x2_mat.tocsr()
 
 
 
@@ -719,27 +761,30 @@ class canonic_ops:
 # ----------------------------------------------------------
 # ----------------------------------------------------------
 
+import numpy as np
+from scipy.sparse.linalg import eigsh
+from scipy.sparse import csr_matrix, lil_matrix
+
 class Hamiltonian:
     def __init__(self, H, mesh, basis=None, other_subspaces_dims=None):
         """
         Parameters
         ----------
         H : sparse matrix
-            The Hamiltonian operator defined on the interior points (after applying Dirichlet BC).
+            The Hamiltonian operator defined on the interior points.
         mesh : object
-            A mesh object that contains the grid information. It should have:
-                - an attribute dims (1, 2 or 3);
-                - full 1D grid arrays (e.g. mesh.mesh_x, mesh.mesh_y, etc.);
-                - the number of grid points (e.g. mesh.Nx, mesh.Ny, ...);
-                - domain bounds (e.g. mesh.x0, mesh.x1, etc.).
-            It is assumed that the operators act on the interior nodes (mesh.[...][1:-1]).
+            A mesh object that contains grid information. It should have:
+                - dims: (1, 2, or 3)
+                - full 1D grid arrays (mesh.mesh_x, mesh.mesh_y, etc.)
+                - number of grid points (mesh.Nx, mesh.Ny, …)
+                - domain bounds (mesh.x0, mesh.x1, etc.)
+            It is assumed that the operators act on the interior nodes (mesh.mesh_x[1:-1], etc.).
         basis : tuple or dict or None
             Basis information. Either a single tuple (fn, N) to be used for all directions,
-            or a dict with keys "x", "y", (and "z") for higher dimensions. If provided, the eigenvectors
-            from solve() are the expansion coefficients in this eigenbasis.
+            or a dict with keys "x", "y", (and "z") for higher dimensions.
+            If provided, the eigenvectors from solve() are expansion coefficients in that basis.
         other_subspaces_dims : list[int], optional
-            List of integers for extra tensor–product dimensions. These dimensions will be prepended 
-            (or later traced over) when reshaping the eigenvectors.
+            Extra tensor–product dimensions (these will be summed over later).
         """
         self.H = H
         self.mesh = mesh
@@ -752,42 +797,85 @@ class Hamiltonian:
         if self.other_subspaces_dims:
             if any(not isinstance(dim, int) for dim in self.other_subspaces_dims):
                 raise ValueError("other_subspaces_dims must be a list of integers")
-                
+        
+        # Flag to note whether basis matrices have been cached.
+        self._cached_basis = False
+
+    def _cache_basis(self):
+        """
+        Precomputes and caches the basis matrices (for physical-space evaluation)
+        based on the provided basis functions. Once computed, these matrices are reused
+        in the reconstruction of eigenfunctions.
+        """
+        if self.basis is None:
+            return
+
+        dims = self.mesh.dims
+        if dims == 1:
+            # Get the 1D basis tuple (or dictionary entry).
+            b_tuple = self.basis if not isinstance(self.basis, dict) else self.basis["x"]
+            fn, N_basis = b_tuple
+            # Evaluate basis functions on the interior 1D grid.
+            self._basis_x = np.stack([fn(n, self.mesh.mesh_x[1:-1])[0] for n in range(N_basis)], axis=0)
+        elif dims == 2:
+            if isinstance(self.basis, dict):
+                fnx, N_basis_x = self.basis["x"]
+                fny, N_basis_y = self.basis["y"]
+            else:
+                fnx, N_basis_x = self.basis
+                fny, N_basis_y = self.basis
+            self._basis_x = np.stack([fnx(n, self.mesh.mesh_x[1:-1])[0] for n in range(N_basis_x)], axis=0)
+            self._basis_y = np.stack([fny(n, self.mesh.mesh_y[1:-1])[0] for n in range(N_basis_y)], axis=0)
+        elif dims == 3:
+            if isinstance(self.basis, dict):
+                fnx, N_basis_x = self.basis["x"]
+                fny, N_basis_y = self.basis["y"]
+                fnz, N_basis_z = self.basis["z"]
+            else:
+                fnx, N_basis_x = self.basis
+                fny, N_basis_y = self.basis
+                fnz, N_basis_z = self.basis
+            self._basis_x = np.stack([fnx(n, self.mesh.mesh_x[1:-1])[0] for n in range(N_basis_x)], axis=0)
+            self._basis_y = np.stack([fny(n, self.mesh.mesh_y[1:-1])[0] for n in range(N_basis_y)], axis=0)
+            self._basis_z = np.stack([fnz(n, self.mesh.mesh_z[1:-1])[0] for n in range(N_basis_z)], axis=0)
+        self._cached_basis = True
+
     def solve(self, k):
         """
-        Diagonalizes the Hamiltonian and stores the eigenvalues and eigenvector coefficients.
-        The eigenvectors are first computed in either the coordinate (grid) basis when basis is None,
-        or as expansion coefficients when basis is provided, and then reconstructed to physical space
-        before computing densities and normalizing.
+        Diagonalizes the Hamiltonian and reconstructs the physical-space wavefunctions
+        (if basis is provided, the eigenvectors are expansion coefficients which are transformed).
+        The reconstruction is performed in a batched and optimized manner.
         
         Parameters
         ----------
         k : int
             Number of eigenpairs to compute.
-            
+        
         Returns
         -------
         energies : ndarray
             Sorted eigenvalues.
         wavefunctions : list of ndarrays
-            The reconstructed physical-space wavefunctions.
+            The reconstructed and normalized physical-space wavefunctions.
         """
-
         energies, eigvecs = eigsh(self.H, k=k, which="SM")
+        print("Solved eigenvalue problem.")
+
+        # Sort eigenpairs.
         order = np.argsort(energies)
         energies = energies[order]
         eigvecs = eigvecs[:, order]
-    
-        # Decide on the reshaping dimensions.
-        if self.mesh.dims == 1:
+
+        # Determine raw reshaping shape.
+        dims = self.mesh.dims
+        if dims == 1:
             if self.basis is None:
                 dim_primary = self.mesh.Nx - 2
             else:
-                # When basis is provided, use the basis tuple's second entry
-                b = self.basis["x"] if isinstance(self.basis, dict) else self.basis
+                b = self.basis if not isinstance(self.basis, dict) else self.basis["x"]
                 _, dim_primary = b
             raw_shape = (dim_primary,) if not self.other_subspaces_dims else tuple(self.other_subspaces_dims) + (dim_primary,)
-        elif self.mesh.dims == 2:
+        elif dims == 2:
             if self.basis is None:
                 dim_x = self.mesh.Nx - 2
                 dim_y = self.mesh.Ny - 2
@@ -800,7 +888,7 @@ class Hamiltonian:
                 _, dim_x = b_x
                 _, dim_y = b_y
             raw_shape = (dim_x, dim_y) if not self.other_subspaces_dims else tuple(self.other_subspaces_dims) + (dim_x, dim_y)
-        elif self.mesh.dims == 3:
+        elif dims == 3:
             if self.basis is None:
                 dim_x = self.mesh.Nx - 2
                 dim_y = self.mesh.Ny - 2
@@ -818,107 +906,86 @@ class Hamiltonian:
             raw_shape = (dim_x, dim_y, dim_z) if not self.other_subspaces_dims else tuple(self.other_subspaces_dims) + (dim_x, dim_y, dim_z)
         else:
             raise ValueError("Mesh dimensionality must be 1, 2, or 3.")
-    
-        # Reshape eigenvectors in their raw form (grid basis or expansion coefficients)
-        raw_wavefunctions = [vec.reshape(raw_shape) for vec in eigvecs.T] 
 
-        # Handle subspace trace operations if needed
+        # Reshape the eigenvector coefficients into their raw form.
+        raw_wavefunctions = [vec.reshape(raw_shape) for vec in eigvecs.T]
+
+        # If extra subspaces exist, sum over them.
         if self.other_subspaces_dims:
             for _ in range(len(self.other_subspaces_dims)):
                 raw_wavefunctions = [np.sum(vec, axis=0) for vec in raw_wavefunctions]
-        
-        # Now reconstruct the physical-space wavefunctions
-        reconstructed_wavefunctions = []
-        for wf in raw_wavefunctions:
-            reconstructed_wavefunctions.append(self._reconstruct_wavefunction(wf))
-        
-        # Calculate densities based on reconstructed wavefunctions
-        densities = [np.abs(wf)**2 for wf in reconstructed_wavefunctions]
-        
-        # Compute normalization factors using the mesh for proper integration
-        if self.mesh.dims == 1:
-            # Get 1D grid spacing for proper integration
-            dx = self.mesh.mesh_x[1] - self.mesh.mesh_x[0]  
-            norm_factors = [np.sum(density) * dx for density in densities]
-        elif self.mesh.dims == 2:
-            # Get 2D grid spacings
+
+        # If a basis is provided, cache the basis matrices once.
+        if self.basis is not None and not self._cached_basis:
+            self._cache_basis()
+
+        # Batch process eigenfunctions.
+        if self.basis is None:
+            # Already in physical space.
+            reconstructed = np.array(raw_wavefunctions)
+        else:
+            if dims == 1:
+                # In the 1D case:
+                # raw_wavefunctions have shape (k, N_basis) and self._basis_x has shape (N_basis, M),
+                # where M = len(mesh.mesh_x[1:-1]). We perform a single matrix multiplication.
+                raw_batch = np.stack(raw_wavefunctions, axis=0)  # shape: (k, N_basis)
+                # NOTE: Remove .T so the inner dimensions align.
+                reconstructed = np.dot(raw_batch, self._basis_x)   # yields (k, M)
+            elif dims == 2:
+                # For 2D case:
+                # raw_wavefunctions: (k, N_basis_x, N_basis_y)
+                raw_batch = np.stack(raw_wavefunctions, axis=0)  # shape: (k, N_basis_x, N_basis_y)
+                # First, contract along y direction.
+                # self._basis_y has shape (N_basis_y, len(mesh.mesh_y[1:-1]))
+                temp = np.matmul(raw_batch, self._basis_y)  # shape: (k, N_basis_x, len(mesh.mesh_y[1:-1]))
+                # Next, contract along x direction:
+                # self._basis_x has shape (N_basis_x, len(mesh.mesh_x[1:-1]))
+                reconstructed = np.einsum('ij,kjl->kil', self._basis_x.T, temp)
+                # Now, reconstructed has shape: (k, len(mesh.mesh_x[1:-1]), len(mesh.mesh_y[1:-1]))
+            elif dims == 3:
+                # For 3D case:
+                # raw_wavefunctions: (k, N_basis_x, N_basis_y, N_basis_z)
+                raw_batch = np.stack(raw_wavefunctions, axis=0)  # shape: (k, n_x, n_y, n_z)
+                # First contract along z:
+                t1 = np.tensordot(raw_batch, self._basis_z, axes=([3],[0]))  # shape: (k, n_x, n_y, M_z)
+                # Then contract along y:
+                t2 = np.tensordot(t1, self._basis_y, axes=([2],[0]))         # shape: (k, n_x, M_y, M_z)
+                # Finally contract along x:
+                psi_temp = np.tensordot(t2, self._basis_x.T, axes=([1],[1]))       # shape: (k, M_y, M_z, M_x)
+                # Rearrange axes to get shape: (k, M_x, M_y, M_z)
+                reconstructed = np.moveaxis(psi_temp, -1, 1)
+            else:
+                raise ValueError("Unsupported dimension.")
+
+        # Compute densities and normalization factors using the mesh spacing.
+        if dims == 1:
+            dx = self.mesh.mesh_x[1] - self.mesh.mesh_x[0]
+            densities = [np.abs(wf)**2 for wf in reconstructed]
+            norm_factors = [np.sum(dens) * dx for dens in densities]
+        elif dims == 2:
             dx = self.mesh.mesh_x[1] - self.mesh.mesh_x[0]
             dy = self.mesh.mesh_y[1] - self.mesh.mesh_y[0]
-            norm_factors = [np.sum(density) * dx * dy for density in densities]
-        elif self.mesh.dims == 3:
-            # Get 3D grid spacings
+            densities = [np.abs(wf)**2 for wf in reconstructed]
+            norm_factors = [np.sum(dens) * dx * dy for dens in densities]
+        elif dims == 3:
             dx = self.mesh.mesh_x[1] - self.mesh.mesh_x[0]
             dy = self.mesh.mesh_y[1] - self.mesh.mesh_y[0]
             dz = self.mesh.mesh_z[1] - self.mesh.mesh_z[0]
-            norm_factors = [np.sum(density) * dx * dy * dz for density in densities]
-        
-        # Normalize the wavefunctions
-        normalized_wavefunctions = [wf / np.sqrt(norm) for wf, norm in zip(reconstructed_wavefunctions, norm_factors)]
-        
-        # Recalculate densities after normalization
+            densities = [np.abs(wf)**2 for wf in reconstructed]
+            norm_factors = [np.sum(dens) * dx * dy * dz for dens in densities]
+
+        # Normalize the wavefunctions.
+        normalized_wavefunctions = [wf / np.sqrt(norm) for wf, norm in zip(reconstructed, norm_factors)]
         normalized_densities = [np.abs(wf)**2 for wf in normalized_wavefunctions]
-        
-        # Save the results
+
+        # Save results.
         self.energies = energies
         self.wavefunctions = normalized_wavefunctions
         self.densities = normalized_densities
-    
+
         return energies, normalized_wavefunctions
 
-    def _reconstruct_wavefunction(self, wf):
-        """
-        Reconstructs the physical-space wavefunction from the stored eigenfunction.
-        
-        If self.basis is provided, the expansion coefficients (wf) are combined with the corresponding basis
-        functions (evaluated on the mesh's interior grid arrays). If self.basis is None, then wf is assumed to be
-        already in the physical space.
-        
-        Returns
-        -------
-        psi : ndarray
-            The reconstructed physical-space wavefunction.
-        """
-        dims = self.mesh.dims
-        
-        # When no basis is provided, the wavefunction is already physical
-        if self.basis is None:
-            return  wf
-        else:
-            # Basis provided: reconstruct using the expansion
-            if dims == 1:
-                # Expect basis to be a tuple (fn, N) or dict entry
-                b_tuple = self.basis["x"] if isinstance(self.basis, dict) else self.basis
-                fn, N_basis = b_tuple
-                # Evaluate the basis functions on the mesh's interior grid
-                basis_mat = np.stack([fn(n, self.mesh.mesh_x[1:-1])[0] for n in range(N_basis)], axis=0)  # shape (N_basis, len(self.mesh.mesh_x[1:-1]))
-                psi = basis_mat.T @ wf.reshape(-1)
-                return psi
-            elif dims == 2:
-                if not isinstance(self.basis, dict):
-                    b_dict = {"x": self.basis, "y": self.basis}
-                else:
-                    b_dict = self.basis
-                fnx, _ = b_dict["x"]
-                fny, _ = b_dict["y"]
-                
-                basis_x = np.stack([fnx(i, self.mesh.mesh_x[1:-1])[0] for i in range(b_dict["x"][1])], axis=0)
-                basis_y = np.stack([fny(j, self.mesh.mesh_y[1:-1])[0] for j in range(b_dict["y"][1])], axis=0)
-                psi = np.einsum('ij,im,jn->mn', wf, basis_x, basis_y)
-                return psi
-            elif dims == 3:
-                if not isinstance(self.basis, dict):
-                    b_dict = {"x": self.basis, "y": self.basis, "z": self.basis}
-                else:
-                    b_dict = self.basis
-                fnx, _ = b_dict["x"]
-                fny, _ = b_dict["y"]
-                fnz, _ = b_dict["z"]
 
-                basis_x = np.stack([fnx(i, self.mesh.mesh_x[1:-1])[0] for i in range(b_dict["x"][1])], axis=0)
-                basis_y = np.stack([fny(j, self.mesh.mesh_y[1:-1])[0] for j in range(b_dict["y"][1])], axis=0)
-                basis_z = np.stack([fnz(k, self.mesh.mesh_z[1:-1])[0] for k in range(b_dict["z"][1])], axis=0)
-                psi = np.einsum('ijk,im,jn,ko->mno', wf, basis_x, basis_y, basis_z)
-                return psi
 
     def plot(self, 
              wf_index:int =0, 
