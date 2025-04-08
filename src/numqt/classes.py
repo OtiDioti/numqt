@@ -6,7 +6,12 @@ from .utils import iterative_kron
 from skimage import measure
 import plotly.graph_objects as go
 from scipy.sparse.linalg import eigsh
+from mpl_toolkits.mplot3d import Axes3D
+from scipy.integrate import quad
+from scipy.sparse import lil_matrix
+from concurrent.futures import ThreadPoolExecutor
 
+        
 class Mesh:
     def __init__(self, 
                  dims: int,
@@ -16,24 +21,9 @@ class Mesh:
                  nx: int = 50,
                  ny: int = None,
                  nz: int = None):
-        """
-        Constructs a uniform structured grid in 1D, 2D, or 3D.
-
-        Parameters
-        ----------
-        dims : int
-            Dimensionality of the grid. Must be 1, 2, or 3.
-        xbounds, ybounds, zbounds : tuple
-            Endpoints of the domain in x, y, and z. (Unused bounds are ignored for dims < 3.)
-        nx, ny, nz : int
-            Number of grid points along x, y, and z axes (including endpoints).
-            If ny or nz are not provided, they default to nx.
-        """
-        # Validate the dimensionality
         if dims not in [1, 2, 3]:
             raise ValueError("dims must be 1, 2, or 3.")
 
-        # Validate domain bounds
         if xbounds is None:
             raise ValueError("xbounds must be provided.")
         if dims >= 2 and ybounds is None:
@@ -41,79 +31,52 @@ class Mesh:
         if dims == 3 and zbounds is None:
             raise ValueError("For dims==3, zbounds must be provided.")
 
-        # Set default values for grid points if not provided
         if ny is None:
             ny = nx
         if nz is None:
             nz = nx
 
-        # Save parameters
         self.dims = dims
         self.xbounds = xbounds
         self.ybounds = ybounds if dims >= 2 else None
         self.zbounds = zbounds if dims == 3 else None
-        
-        # Unpack domain bounds for convenience
+
         self.x0, self.x1 = xbounds
         if dims >= 2:
             self.y0, self.y1 = ybounds
         if dims == 3:
             self.z0, self.z1 = zbounds
-            
-        # Generate uniform grid based on the dimensionality
+
         self.generate_mesh(nx, ny, nz)
-        
-        # Store grid sizes
+
         self.Nx = len(self.mesh_x)
         self.Ny = len(self.mesh_y) if dims >= 2 else 0
         self.Nz = len(self.mesh_z) if dims == 3 else 0
 
     def generate_mesh(self, nx, ny, nz):
-        """Creates uniform grids for each dimension."""
-        # Create x grid
         self.mesh_x = np.linspace(self.x0, self.x1, nx)
-        
-        # Create y grid if needed
-        if self.dims >= 2:
-            self.mesh_y = np.linspace(self.y0, self.y1, ny)
-        else:
-            self.mesh_y = None
-            
-        # Create z grid if needed
-        if self.dims == 3:
-            self.mesh_z = np.linspace(self.z0, self.z1, nz)
-        else:
-            self.mesh_z = None
-            
-    def get_grids(self):
-        """
-        Returns the grid arrays.
+        self.mesh_y = np.linspace(self.y0, self.y1, ny) if self.dims >= 2 else None
+        self.mesh_z = np.linspace(self.z0, self.z1, nz) if self.dims == 3 else None
 
-        Returns
-        -------
-        For dims==1: mesh_x
-        For dims==2: mesh_x, mesh_y
-        For dims==3: mesh_x, mesh_y, mesh_z
-        """
+    @property
+    def total_meshes(self):
+        if self.dims == 1:
+            return self.mesh_x
+        elif self.dims == 2:
+            return np.meshgrid(self.mesh_x, self.mesh_y, indexing='ij')
+        elif self.dims == 3:
+            return np.meshgrid(self.mesh_x, self.mesh_y, self.mesh_z, indexing='ij')
+
+    def get_grids(self):
         if self.dims == 1:
             return self.mesh_x
         elif self.dims == 2:
             return self.mesh_x, self.mesh_y
         elif self.dims == 3:
             return self.mesh_x, self.mesh_y, self.mesh_z
-    
+
     def get_spacings(self):
-        """
-        Returns the grid spacings for each dimension.
-        
-        Returns
-        -------
-        For dims==1: dx
-        For dims==2: dx, dy
-        For dims==3: dx, dy, dz
-        """
         dx = (self.x1 - self.x0) / (self.Nx - 1)
-        
         if self.dims == 1:
             return dx
         elif self.dims == 2:
@@ -124,38 +87,30 @@ class Mesh:
             dz = (self.z1 - self.z0) / (self.Nz - 1)
             return dx, dy, dz
 
-    # ----------------------------------------------------------
-    # Visualization Methods
-    # ----------------------------------------------------------
-
     def visualize_grid(self, marker_size=10, elev=30, azim=45, alpha=0.1):
-        """
-        Visualizes the grid.
-        
-        - In 1D, displays the grid points on a line.
-        - In 2D, plots the full tensor product of the 1D grids.
-        - In 3D, shows a 3D scatter plot of the tensor product.
-        """
         if self.dims == 1:
             plt.figure(figsize=(8, 2))
-            plt.scatter(self.mesh_x, np.zeros_like(self.mesh_x), s=marker_size, c='b', alpha=alpha)
+            plt.scatter(self.total_meshes, np.zeros_like(self.total_meshes), s=marker_size, c='b', alpha=alpha)
             plt.xlabel('x')
             plt.title("1D Grid Visualization")
             plt.yticks([])
+            plt.grid(True)
             plt.show()
+
         elif self.dims == 2:
-            X, Y = np.meshgrid(self.mesh_x, self.mesh_y, indexing='ij')
+            X, Y = self.total_meshes
             plt.figure(figsize=(8, 6))
             plt.scatter(X.flatten(), Y.flatten(), s=marker_size, c='b', alpha=alpha)
             plt.xlabel('x')
             plt.ylabel('y')
             plt.title("2D Grid Visualization")
+            plt.grid(True)
             plt.show()
+
         elif self.dims == 3:
+            X, Y, Z = self.total_meshes
             fig = plt.figure(figsize=(8, 6))
             ax = fig.add_subplot(111, projection='3d')
-            # Create the full 3D tensor product of grid points.
-            X, Y, Z = np.meshgrid(self.mesh_x, self.mesh_y, self.mesh_z, indexing='ij')
             ax.scatter(X.flatten(), Y.flatten(), Z.flatten(), s=marker_size, c='b', alpha=alpha)
             ax.set_xlabel('x')
             ax.set_ylabel('y')
@@ -163,87 +118,106 @@ class Mesh:
             ax.view_init(elev=elev, azim=azim)
             plt.title("3D Grid Visualization")
             plt.show()
-    
+
     def visualize_slice(self, slice_axis: str, slice_value: float, marker_size=20, alpha=0.7, c="b"):
         """
-        Visualizes a slice of the grid.
-        
-        In 2D, the slice will be a 1D set of points;
-        in 3D, the slice will be a 2D plane of points.
-        (Slicing is not defined for 1D grids.)
+        Visualizes a slice of the grid along a specified axis at the given value.
         
         Parameters
         ----------
         slice_axis : str
-            The axis along which to take the slice ('x', 'y', or 'z').
+            The axis along which to slice ('x', 'y', or 'z').
         slice_value : float
-            The coordinate value at which to slice.
+            The value at which to slice the grid.
+        marker_size : int, optional
+            Size of the markers in the plot.
+        alpha : float, optional
+            Transparency of the markers.
+        c : str, optional
+            Color of the markers.
         """
         slice_axis = slice_axis.lower()
+        
         if self.dims == 1:
             raise ValueError("Slicing is not applicable for 1D grids.")
+        
         elif self.dims == 2:
             if slice_axis == 'x':
                 idx = np.argmin(np.abs(self.mesh_x - slice_value))
-                slice_coord = self.mesh_x[idx]
-                # Fixed x, vary y.
+                X = np.full_like(self.mesh_y, self.mesh_x[idx])
                 Y = self.mesh_y
-                X = np.full_like(Y, slice_coord)
-                plt.figure(figsize=(8, 4))
-                plt.scatter(X, Y, s=marker_size, c=c, alpha=alpha)
-                plt.xlabel('x')
-                plt.ylabel('y')
-                plt.title(f"Slice at x = {slice_coord:.2f} (closest to {slice_value})")
             elif slice_axis == 'y':
                 idx = np.argmin(np.abs(self.mesh_y - slice_value))
-                slice_coord = self.mesh_y[idx]
-                # Fixed y, vary x.
+                Y = np.full_like(self.mesh_x, self.mesh_y[idx])
                 X = self.mesh_x
-                Y = np.full_like(X, slice_coord)
-                plt.figure(figsize=(8, 4))
-                plt.scatter(X, Y, s=marker_size, c=c, alpha=alpha)
-                plt.xlabel('x')
-                plt.ylabel('y')
-                plt.title(f"Slice at y = {slice_coord:.2f} (closest to {slice_value})")
             else:
                 raise ValueError("For 2D grids, slice_axis must be 'x' or 'y'.")
+            
+            plt.figure(figsize=(8, 4))
+            plt.scatter(X, Y, s=marker_size, c=c, alpha=alpha)
+            plt.xlabel('x' if slice_axis == 'y' else 'y')
+            plt.ylabel('y' if slice_axis == 'y' else 'x')
+            plt.title(f"Slice at {slice_axis} = {self.mesh_x[idx]:.2f}" if slice_axis == 'x' 
+                      else f"Slice at {slice_axis} = {self.mesh_y[idx]:.2f}")
             plt.grid(True)
             plt.show()
+        
         elif self.dims == 3:
             if slice_axis == 'x':
                 idx = np.argmin(np.abs(self.mesh_x - slice_value))
-                slice_coord = self.mesh_x[idx]
-                # Build the 2D grid in y-z.
-                Y, Z = np.meshgrid(self.mesh_y, self.mesh_z, indexing='ij')
+                actual_value = self.mesh_x[idx]
+                # Create a meshgrid of y and z values
+                Y, Z = np.meshgrid(self.mesh_y, self.mesh_z)
+                # Prepare points for the slice
+                points_y = Y.flatten()
+                points_z = Z.flatten()
+                # All x values are the same
+                points_x = np.full_like(points_y, actual_value)
+                # Plot y and z coordinates
                 plt.figure(figsize=(8, 6))
-                plt.scatter(Y.flatten(), Z.flatten(), s=marker_size, c=c, alpha=alpha)
+                plt.scatter(points_y, points_z, s=marker_size, c=c, alpha=alpha)
                 plt.xlabel('y')
                 plt.ylabel('z')
-                plt.title(f"Slice at x = {slice_coord:.2f} (closest to {slice_value})")
+                
             elif slice_axis == 'y':
                 idx = np.argmin(np.abs(self.mesh_y - slice_value))
-                slice_coord = self.mesh_y[idx]
-                # Build the 2D grid in x-z.
-                X, Z = np.meshgrid(self.mesh_x, self.mesh_z, indexing='ij')
+                actual_value = self.mesh_y[idx]
+                # Create a meshgrid of x and z values
+                X, Z = np.meshgrid(self.mesh_x, self.mesh_z)
+                # Prepare points for the slice
+                points_x = X.flatten()
+                points_z = Z.flatten()
+                # All y values are the same
+                points_y = np.full_like(points_x, actual_value)
+                # Plot x and z coordinates
                 plt.figure(figsize=(8, 6))
-                plt.scatter(X.flatten(), Z.flatten(), s=marker_size, c=c, alpha=alpha)
+                plt.scatter(points_x, points_z, s=marker_size, c=c, alpha=alpha)
                 plt.xlabel('x')
                 plt.ylabel('z')
-                plt.title(f"Slice at y = {slice_coord:.2f} (closest to {slice_value})")
+                
             elif slice_axis == 'z':
                 idx = np.argmin(np.abs(self.mesh_z - slice_value))
-                slice_coord = self.mesh_z[idx]
-                # Build the 2D grid in x-y.
-                X, Y = np.meshgrid(self.mesh_x, self.mesh_y, indexing='ij')
+                actual_value = self.mesh_z[idx]
+                # Create a meshgrid of x and y values
+                X, Y = np.meshgrid(self.mesh_x, self.mesh_y)
+                # Prepare points for the slice
+                points_x = X.flatten()
+                points_y = Y.flatten()
+                # All z values are the same
+                points_z = np.full_like(points_x, actual_value)
+                # Plot x and y coordinates
                 plt.figure(figsize=(8, 6))
-                plt.scatter(X.flatten(), Y.flatten(), s=marker_size, c=c, alpha=alpha)
+                plt.scatter(points_x, points_y, s=marker_size, c=c, alpha=alpha)
                 plt.xlabel('x')
                 plt.ylabel('y')
-                plt.title(f"Slice at z = {slice_coord:.2f} (closest to {slice_value})")
+                
             else:
-                raise ValueError("slice_axis must be one of 'x', 'y', or 'z'.")
+                raise ValueError("For 3D grids, slice_axis must be one of 'x', 'y', or 'z'.")
+            
+            plt.title(f"Slice at {slice_axis} = {actual_value:.2f}")
             plt.grid(True)
             plt.show()
+
 
 # ----------------------------------------------------------
 # ----------------------------------------------------------
@@ -252,155 +226,297 @@ class Mesh:
 # ----------------------------------------------------------
 
 class canonic_ops:
-    def __init__(self, mesh, additional_subspaces=None, hbar=1):
+    def __init__(self, mesh, ops_to_compute, basis=None, additional_subspaces=None, limit_divisions=None, hbar=1):
         """
-        Constructs the discretized quantum mechanical operators for position and momentum
-        using finite difference methods on a uniform grid (only the interior points are used).
-
+        Constructs the discretized quantum mechanical operators for position and momentum.
+        Only computes the canonical operators specified in the ops_to_compute list,
+        which should contain strings such as "p", "p2", "x", "x2".
+        
+        For example, if ops_to_compute=["p2", "x2"], then only the p^2 and x^2 operators
+        are computed along each dimension.
+        
         Parameters
         ----------
         mesh : object
             Must have an attribute "dims" (equal to 1, 2, or 3) and a get_grids() method
             returning the 1D grid arrays. For dims==1, get_grids() returns a 1D array;
             for dims==2, it returns (mesh_x, mesh_y); for dims==3, (mesh_x, mesh_y, mesh_z).
+        ops_to_compute : list of str
+            A list of strings indicating which canonical operators to compute. Valid strings 
+            are "p", "p2", "x", and "x2".
+        basis : tuple or dict or None, optional
+            Basis information. Either a single tuple (fn, N) to be used for all directions,
+            or a dict with keys "x", "y", (and "z") for higher dimensions. 
         additional_subspaces : list, optional
             A list with the structure [position, I_second, I_third, ...] used to embed the operator
-            into a tensor product space. (If not provided, the operators are returned as is.)
+            into a tensor product space (when no basis is given).
+        limit_divisions : int, optional
+            Number of divisions to take when numerically integrating (only used for "tight_binding").
         hbar : float, optional
-            Planck’s constant (defaults to 1).
+            Planck's constant (defaults to 1).
         """
+        from scipy.sparse import eye, kron
+        import numpy as np
+
         self.hbar = hbar
         self.dim = mesh.dims
+        self.basis = basis
         self.additional_subspaces = additional_subspaces
+        self.limit_divisions = limit_divisions
+        self.ops_to_compute = ops_to_compute  # List of operator names to compute
 
-        # Get the grid(s) from the mesh and compute the number of interior points.
+        # Get the mesh grids (all operators are only defined on interior points)
         if self.dim == 1:
-            mesh_x = mesh.get_grids()  # expected 1D array
-            self.Nx = len(mesh_x) - 2
+            self.mesh_x = mesh.get_grids()  # 1D array
+            self.Nx_grid = len(self.mesh_x) - 2
         elif self.dim == 2:
-            mesh_x, mesh_y = mesh.get_grids()
-            self.Nx = len(mesh_x) - 2
-            self.Ny = len(mesh_y) - 2
+            self.mesh_x, self.mesh_y = mesh.get_grids()
+            self.Nx_grid = len(self.mesh_x) - 2
+            self.Ny_grid = len(self.mesh_y) - 2
         elif self.dim == 3:
-            mesh_x, mesh_y, mesh_z = mesh.get_grids()
-            self.Nx = len(mesh_x) - 2
-            self.Ny = len(mesh_y) - 2
-            self.Nz = len(mesh_z) - 2
+            self.mesh_x, self.mesh_y, self.mesh_z = mesh.get_grids()
+            self.Nx_grid = len(self.mesh_x) - 2
+            self.Ny_grid = len(self.mesh_y) - 2
+            self.Nz_grid = len(self.mesh_z) - 2
 
-        # Pre-construct identity matrices on the interior grid.
-        I_x = eye(self.Nx, format='csr')
-        if self.dim >= 2:
-            I_y = eye(self.Ny, format='csr')
-        if self.dim == 3:
-            I_z = eye(self.Nz, format='csr')
-        # Set up the "additional subspaces" lists for tensor products.
- 
-        if additional_subspaces is None:
+        # Use basis integration routines if a basis is provided;
+        # otherwise, use finite-difference approximations.
+        if self.basis is None:
+            # Pre-construct identity matrices on the interior grid for embedding.
+            I_x = eye(self.Nx_grid, format='csr')
+            if self.dim >= 2:
+                I_y = eye(self.Ny_grid, format='csr')
+            if self.dim == 3:
+                I_z = eye(self.Nz_grid, format='csr')
+            
+            # Build additional subspace lists.
+            if additional_subspaces is None:
+                if self.dim == 1:
+                    additional_x = [0]
+                elif self.dim == 2:
+                    additional_x = [0, I_y]
+                    additional_y = [1, I_x]
+                elif self.dim == 3:
+                    additional_x = [0, I_y, I_z]
+                    additional_y = [1, I_x, I_z]
+                    additional_z = [2, I_x, I_y]
+            else:
+                # Embed operator into provided additional subspaces.
+                if self.dim == 1:
+                    additional_x = [len(additional_subspaces)] + additional_subspaces
+                elif self.dim == 2:
+                    additional_x = [len(additional_subspaces)] + additional_subspaces + [I_y]
+                    additional_y = [len(additional_subspaces)+1] + additional_subspaces + [I_x]
+                elif self.dim == 3:
+                    additional_x = [len(additional_subspaces)] + additional_subspaces + [I_y, I_z]
+                    additional_y = [len(additional_subspaces)+1] + additional_subspaces + [I_x, I_z]
+                    additional_z = [len(additional_subspaces)+2] + additional_subspaces + [I_x, I_y]
+            
+            # Compute finite-difference based operators only if requested.
             if self.dim == 1:
-                additional_x = [0]
+                if "p" in self.ops_to_compute:
+                    self.px = self.p(self.mesh_x, additional_x)
+                if "p2" in self.ops_to_compute:
+                    self.px2 = self.p2(self.mesh_x, additional_x)
+                if "x" in self.ops_to_compute:
+                    self.x_op = self.x(self.mesh_x, additional_x)
+                if "x2" in self.ops_to_compute:
+                    self.x2_op = self.x2(self.mesh_x, additional_x)
             elif self.dim == 2:
-                additional_x = [0, I_y]
-                additional_y = [1, I_x]
+                if "p" in self.ops_to_compute:
+                    self.px = self.p(self.mesh_x, additional_x)
+                    self.py = self.p(self.mesh_y, additional_y)
+                if "p2" in self.ops_to_compute:
+                    self.px2 = self.p2(self.mesh_x, additional_x)
+                    self.py2 = self.p2(self.mesh_y, additional_y)
+                if "x" in self.ops_to_compute:
+                    self.x_op = self.x(self.mesh_x, additional_x)
+                    self.y_op = self.x(self.mesh_y, additional_y)
+                if "x2" in self.ops_to_compute:
+                    self.x2_op = self.x2(self.mesh_x, additional_x)
+                    self.y2_op = self.x2(self.mesh_y, additional_y)
             elif self.dim == 3:
-                additional_x = [0, I_y, I_z]
-                additional_y = [1, I_x, I_z]
-                additional_z = [2, I_x, I_y]
+                if "p" in self.ops_to_compute:
+                    self.px = self.p(self.mesh_x, additional_x)
+                    self.py = self.p(self.mesh_y, additional_y)
+                    self.pz = self.p(self.mesh_z, additional_z)
+                if "p2" in self.ops_to_compute:
+                    self.px2 = self.p2(self.mesh_x, additional_x)
+                    self.py2 = self.p2(self.mesh_y, additional_y)
+                    self.pz2 = self.p2(self.mesh_z, additional_z)
+                if "x" in self.ops_to_compute:
+                    self.x_op = self.x(self.mesh_x, additional_x)
+                    self.y_op = self.x(self.mesh_y, additional_y)
+                    self.z_op = self.x(self.mesh_z, additional_z)
+                if "x2" in self.ops_to_compute:
+                    self.x2_op = self.x2(self.mesh_x, additional_x)
+                    self.y2_op = self.x2(self.mesh_y, additional_y)
+                    self.z2_op = self.x2(self.mesh_z, additional_z)
         else:
-            if self.dim == 1:
-                additional_x = [len(additional_subspaces) + 0] + [identity for identity in additional_subspaces]
-            elif self.dim == 2:
-                additional_x = [len(additional_subspaces) + 0] + [identity for identity in additional_subspaces] + [I_y]
-                additional_y = [len(additional_subspaces) + 1] + [identity for identity in additional_subspaces] + [I_x]
-            elif self.dim == 3:
-                additional_x = [len(additional_subspaces) + 0] + [identity for identity in additional_subspaces] + [I_y, I_z]
-                additional_y = [len(additional_subspaces) + 1] + [identity for identity in additional_subspaces] + [I_x, I_z]
-                additional_z = [len(additional_subspaces) + 2] + [identity for identity in additional_subspaces] + [I_x, I_y]
-                
-        # Generate only the operators needed for the given dimensionality.
-        if self.dim == 1:
-            self.px    = self.p(mesh_x, additional_x)
-            self.px2   = self.p2(mesh_x, additional_x)
-            self.x_op  = self.x(mesh_x, additional_x)
-            self.x2_op = self.x2(mesh_x, additional_x)
-        elif self.dim == 2:
-            self.px    = self.p(mesh_x, additional_x)
-            self.py    = self.p(mesh_y, additional_y)
-            self.px2   = self.p2(mesh_x, additional_x)
-            self.py2   = self.p2(mesh_y, additional_y)
-            self.x_op  = self.x(mesh_x, additional_x)
-            self.y_op  = self.x(mesh_y, additional_y)
-            self.x2_op = self.x2(mesh_x, additional_x)
-            self.y2_op = self.x2(mesh_y, additional_y)
-        elif self.dim == 3:
-            self.px    = self.p(mesh_x, additional_x)
-            self.py    = self.p(mesh_y, additional_y)
-            self.pz    = self.p(mesh_z, additional_z)
-            self.px2   = self.p2(mesh_x, additional_x)
-            self.py2   = self.p2(mesh_y, additional_y)
-            self.pz2   = self.p2(mesh_z, additional_z)
-            self.x_op  = self.x(mesh_x, additional_x)
-            self.y_op  = self.x(mesh_y, additional_y)
-            self.z_op  = self.x(mesh_z, additional_z)
-            self.x2_op = self.x2(mesh_x, additional_x)
-            self.y2_op = self.x2(mesh_y, additional_y)
-            self.z2_op = self.x2(mesh_z, additional_z)
+            # If a basis is given, use direct numerical integration routines.
+            def get_basis(direction):
+                if isinstance(self.basis, dict):
+                    return self.basis.get(direction)
+                else:
+                    return self.basis
 
+            if self.dim == 1:
+                basis_x = get_basis("x")
+                fn_x, N_basis_x = basis_x
+                if "p" in self.ops_to_compute:
+                    self.px = self.compute_p_matrix(fn_x, self.mesh_x, N_basis_x)
+                if "p2" in self.ops_to_compute:
+                    self.px2 = self.compute_p2_matrix(fn_x, self.mesh_x, N_basis_x)
+                if "x" in self.ops_to_compute:
+                    self.x_op = self.compute_x_matrix(fn_x, self.mesh_x, N_basis_x)
+                if "x2" in self.ops_to_compute:
+                    self.x2_op = self.compute_x2_matrix(fn_x, self.mesh_x, N_basis_x)
+            elif self.dim == 2:
+                basis_x = get_basis("x")
+                basis_y = get_basis("y")
+                if basis_y is None:
+                    basis_y = basis_x
+                fn_x, N_basis_x = basis_x
+                fn_y, N_basis_y = basis_y
+
+                if "p" in self.ops_to_compute:
+                    p_x = self.compute_p_matrix(fn_x, self.mesh_x, N_basis_x)
+                    p_y = self.compute_p_matrix(fn_y, self.mesh_y, N_basis_y)
+                if "p2" in self.ops_to_compute:
+                    p2_x = self.compute_p2_matrix(fn_x, self.mesh_x, N_basis_x)
+                    p2_y = self.compute_p2_matrix(fn_y, self.mesh_y, N_basis_y)
+                if "x" in self.ops_to_compute:
+                    x_op = self.compute_x_matrix(fn_x, self.mesh_x, N_basis_x)
+                    y_op = self.compute_x_matrix(fn_y, self.mesh_y, N_basis_y)
+                if "x2" in self.ops_to_compute:
+                    x2_op = self.compute_x2_matrix(fn_x, self.mesh_x, N_basis_x)
+                    y2_op = self.compute_x2_matrix(fn_y, self.mesh_y, N_basis_y)
+
+                # Build identities and embed via tensor products
+                from scipy.sparse import eye, kron
+                I_x = eye(N_basis_x, format='csr')
+                I_y = eye(N_basis_y, format='csr')
+                if "p" in self.ops_to_compute:
+                    self.px = kron(p_x, I_y, format='csr')
+                    self.py = kron(I_x, p_y, format='csr')
+                if "p2" in self.ops_to_compute:
+                    self.px2 = kron(p2_x, I_y, format='csr')
+                    self.py2 = kron(I_x, p2_y, format='csr')
+                if "x" in self.ops_to_compute:
+                    self.x_op = kron(x_op, I_y, format='csr')
+                    self.y_op = kron(I_x, y_op, format='csr')
+                if "x2" in self.ops_to_compute:
+                    self.x2_op = kron(x2_op, I_y, format='csr')
+                    self.y2_op = kron(I_x, y2_op, format='csr')
+            elif self.dim == 3:
+                basis_x = get_basis("x")
+                basis_y = get_basis("y")
+                basis_z = get_basis("z")
+                if basis_y is None:
+                    basis_y = basis_x
+                if basis_z is None:
+                    basis_z = basis_x
+                fn_x, N_basis_x = basis_x
+                fn_y, N_basis_y = basis_y
+                fn_z, N_basis_z = basis_z
+
+                if "p" in self.ops_to_compute:
+                    p_x = self.compute_p_matrix(fn_x, self.mesh_x, N_basis_x)
+                    p_y = self.compute_p_matrix(fn_y, self.mesh_y, N_basis_y)
+                    p_z = self.compute_p_matrix(fn_z, self.mesh_z, N_basis_z)
+                if "p2" in self.ops_to_compute:
+                    p2_x = self.compute_p2_matrix(fn_x, self.mesh_x, N_basis_x)
+                    p2_y = self.compute_p2_matrix(fn_y, self.mesh_y, N_basis_y)
+                    p2_z = self.compute_p2_matrix(fn_z, self.mesh_z, N_basis_z)
+                if "x" in self.ops_to_compute:
+                    x_op = self.compute_x_matrix(fn_x, self.mesh_x, N_basis_x)
+                    y_op = self.compute_x_matrix(fn_y, self.mesh_y, N_basis_y)
+                    z_op = self.compute_x_matrix(fn_z, self.mesh_z, N_basis_z)
+                if "x2" in self.ops_to_compute:
+                    x2_op = self.compute_x2_matrix(fn_x, self.mesh_x, N_basis_x)
+                    y2_op = self.compute_x2_matrix(fn_y, self.mesh_y, N_basis_y)
+                    z2_op = self.compute_x2_matrix(fn_z, self.mesh_z, N_basis_z)
+
+                # Build identities and embed via tensor products: ordering chosen as x ⊗ y ⊗ z.
+                from scipy.sparse import eye
+                I_x = eye(N_basis_x, format='csr')
+                I_y = eye(N_basis_y, format='csr')
+                I_z = eye(N_basis_z, format='csr')
+                if "p" in self.ops_to_compute:
+                    self.px = iterative_kron([p_x, I_y, I_z])
+                    self.py = iterative_kron([I_x, p_y, I_z])
+                    self.pz = iterative_kron([I_x, I_y, p_z])
+                if "p2" in self.ops_to_compute:
+                    self.px2 = iterative_kron([p2_x, I_y, I_z])
+                    self.py2 = iterative_kron([I_x, p2_y, I_z])
+                    self.pz2 = iterative_kron([I_x, I_y, p2_z])
+                if "x" in self.ops_to_compute:
+                    self.x_op = iterative_kron([x_op, I_y, I_z])
+                    self.y_op = iterative_kron([I_x, y_op, I_z])
+                    self.z_op = iterative_kron([I_x, I_y, z_op])
+                if "x2" in self.ops_to_compute:
+                    self.x2_op = iterative_kron([x2_op, I_y, I_z])
+                    self.y2_op = iterative_kron([I_x, y2_op, I_z])
+                    self.z2_op = iterative_kron([I_x, I_y, z2_op])
+            else:
+                raise ValueError("Unsupported dimension: {}".format(self.dim))
+    
     def get_ops(self):
         """
         Returns the constructed operators in a dictionary.
-        For dims==1, only the x-operators are returned.
-        For dims==2, x- and y-operators are returned.
-        For dims==3, x-, y-, and z-operators are returned.
+        Only returns the operators which were computed.
+        For dims==1, returns the x-operators; for dims==2, returns x- and y-operators;
+        for dims==3, returns x-, y-, and z-operators.
         """
+        ops = {}
         if self.dim == 1:
-            ops = {
-                "p":  self.px,
-                "p2": self.px2,
-                "x":  self.x_op,
-                "x2": self.x2_op
-            }
+            if hasattr(self, "px"):
+                ops["p"] = self.px
+            if hasattr(self, "px2"):
+                ops["p2"] = self.px2
+            if hasattr(self, "x_op"):
+                ops["x"] = self.x_op
+            if hasattr(self, "x2_op"):
+                ops["x2"] = self.x2_op
         elif self.dim == 2:
-            ops = {
-                "p":  [self.px, self.py],
-                "p2": [self.px2, self.py2],
-                "x":  [self.x_op, self.y_op],
-                "x2": [self.x2_op, self.y2_op]
-            }
+            if hasattr(self, "px") and hasattr(self, "py"):
+                ops["p"] = [self.px, self.py]
+            if hasattr(self, "px2") and hasattr(self, "py2"):
+                ops["p2"] = [self.px2, self.py2]
+            if hasattr(self, "x_op") and hasattr(self, "y_op"):
+                ops["x"] = [self.x_op, self.y_op]
+            if hasattr(self, "x2_op") and hasattr(self, "y2_op"):
+                ops["x2"] = [self.x2_op, self.y2_op]
         elif self.dim == 3:
-            ops = {
-                "p":  [self.px, self.py, self.pz],
-                "p2": [self.px2, self.py2, self.pz2],
-                "x":  [self.x_op, self.y_op, self.z_op],
-                "x2": [self.x2_op, self.y2_op, self.z2_op]
-            }
+            if hasattr(self, "px") and hasattr(self, "py") and hasattr(self, "pz"):
+                ops["p"] = [self.px, self.py, self.pz]
+            if (hasattr(self, "px2") and hasattr(self, "py2") and
+                hasattr(self, "pz2")):
+                ops["p2"] = [self.px2, self.py2, self.pz2]
+            if (hasattr(self, "x_op") and hasattr(self, "y_op") and
+                hasattr(self, "z_op")):
+                ops["x"] = [self.x_op, self.y_op, self.z_op]
+            if (hasattr(self, "x2_op") and hasattr(self, "y2_op") and
+                hasattr(self, "z2_op")):
+                ops["x2"] = [self.x2_op, self.y2_op, self.z2_op]
         return ops
 
-    def p(self, mesh, additional = None):
+    # --- Methods for computing operators on the grid (finite difference approximations) ---
+    def p(self, mesh, additional=None):
         """
-        Constructs the discretized momentum operator (p = -i*hbar*d/dx) using a
-        2-point central difference stencil (2nd-order accurate) on a uniform grid.
-    
-        Parameters
-        ----------
-        mesh : ndarray
-            1D array for the grid in the given dimension.
-        other_subspaces : list, optional
-            If provided, should be of the form [position, I2, I3, ...] and the operator will be
-            embedded in the tensor product via iterative_kron.
+        Constructs the discretized momentum operator via a 2-point central difference.
         """
+        from scipy.sparse import diags
+        import numpy as np
+
         dx = np.abs(mesh[1] - mesh[0])
-        N = len(mesh) - 2  # only use interior points
-    
-        # Simple central difference: df/dx ≈ [f(x+dx) - f(x-dx)]/(2*dx)
+        N = len(mesh) - 2
         offsets = np.array([-1, 1])
         coeffs = np.array([-1, 1], dtype=complex)
         prefactor = -1j * self.hbar / (2 * dx)
-        diagonals = [
-            prefactor * coeff * np.ones(N - abs(offset), dtype=complex)
-            for offset, coeff in zip(offsets, coeffs)
-        ]
+        diagonals = [prefactor * coeff * np.ones(N - abs(offset), dtype=complex)
+                     for offset, coeff in zip(offsets, coeffs)]
         p_mat = diags(diagonals, offsets, shape=(N, N), format='csr')
-    
         if additional is not None:
             pos = additional[0]
             kron_list = additional[1:].copy()
@@ -408,34 +524,22 @@ class canonic_ops:
             return iterative_kron(kron_list)
         else:
             return p_mat
-    
+
     def p2(self, mesh, additional=None):
         """
-        Constructs the discretized squared momentum operator (p² = -ħ² d²/dx²)
-        using a 3-point central difference stencil (2nd-order accurate) on a uniform grid.
-    
-        Parameters
-        ----------
-        mesh : ndarray
-            1D array for the grid in the given dimension.
-        other_subspaces : list, optional
-            If provided, should be of the form [position, I2, I3, ...] to embed the operator
-            into a tensor product space.
+        Constructs the discretized squared momentum operator via a 3-point stencil.
         """
+        from scipy.sparse import diags
+        import numpy as np
+
         dx = np.abs(mesh[1] - mesh[0])
-        N = len(mesh) - 2  # interior points only
-    
-        # Standard 3-point stencil for second derivative:
-        # d²f/dx² ≈ [f(x-dx) - 2*f(x) + f(x+dx)]/(dx²)
+        N = len(mesh) - 2
         offsets = np.array([-1, 0, 1])
         coeffs = np.array([1, -2, 1], dtype=float)
         prefactor = -self.hbar**2 / (dx**2)
-        diagonals = [
-            prefactor * coeff * np.ones(N - abs(offset), dtype=float)
-            for offset, coeff in zip(offsets, coeffs)
-        ]
+        diagonals = [prefactor * coeff * np.ones(N - abs(offset), dtype=float)
+                     for offset, coeff in zip(offsets, coeffs)]
         p2_mat = diags(diagonals, offsets, shape=(N, N), format='csr')
-    
         if additional is not None:
             pos = additional[0]
             kron_list = additional[1:].copy()
@@ -443,23 +547,14 @@ class canonic_ops:
             return iterative_kron(kron_list)
         else:
             return p2_mat
-    
+
     def x(self, mesh, additional=None):
         """
-        Constructs the discretized position operator
-        (defined on interior points only).
-    
-        Parameters
-        ----------
-        mesh : ndarray
-            1D grid array.
-        other_subspaces : list, optional
-            If provided, should be of the form [position, I2, I3, ...] to embed the operator
-            into a tensor product space.
+        Constructs the discretized position operator (diagonal in the grid basis).
         """
+        from scipy.sparse import diags
         x_interior = mesh[1:-1]
         X = diags(x_interior, 0, format='csr')
-    
         if additional is not None:
             pos = additional[0]
             kron_list = additional[1:].copy()
@@ -467,22 +562,14 @@ class canonic_ops:
             return iterative_kron(kron_list)
         else:
             return X
-    
+
     def x2(self, mesh, additional=None):
         """
-        Constructs the discretized x² operator.
-    
-        Parameters
-        ----------
-        mesh : ndarray
-            1D grid array.
-        other_subspaces : list, optional
-            If provided, should be of the form [position, I2, I3, ...] to embed the operator
-            into a tensor product space.
+        Constructs the discretized squared position operator.
         """
+        from scipy.sparse import diags
         x_interior = mesh[1:-1]
         X2 = diags(x_interior**2, 0, format='csr')
-    
         if additional is not None:
             pos = additional[0]
             kron_list = additional[1:].copy()
@@ -490,305 +577,137 @@ class canonic_ops:
             return iterative_kron(kron_list)
         else:
             return X2
-    def project(self, basis):
+
+    # --- Methods for direct computation of matrix elements via numerical integration ---
+    def compute_p_matrix(self, fn, mesh, N):
         """
-        Projects the canonical operators (position, momentum, and their squares) onto a new basis set.
-        
-        For 1D, the `basis` parameter should be a tuple:
-            (fn, x0, x1, dx, N)
-        For 2D or 3D, `basis` can be provided either as:
-            - A single tuple, in which case the same basis is used for all directions, or
-            - A dictionary with keys "x", "y", (and "z") where each value is a tuple
-              (fn, x0, x1, dx, N) for the corresponding direction.
-              
-        The projection is performed using the provided functions:
-          - p(fn, x0, x1, dx, N, sparse)
-          - p2(fn, x0, x1, dx, N, sparse)
-          - x(fn, x0, x1, dx, N, sparse)
-          - x2(fn, x0, x1, dx, N, sparse)
-        
-        These functions are assumed to be defined in the global scope.
-        The projected operators are computed via discretized integration and are always returned as sparse matrices.
-        
-        Parameters
-        ----------
-        basis : tuple or dict
-            Basis information. Either a single tuple (fn, x0, x1, dx, N) to be used for all directions,
-            or a dict with keys "x", "y", (and "z") for higher dimensions.
-        
-        Returns
-        -------
-        dict
-            A dictionary of projected operators. For 1D:
-                {"p": p_proj, "p2": p2_proj, "x": x_proj, "x2": x2_proj}
-            For 2D:
-                {"p": [p_x_proj, p_y_proj],
-                 "p2": [p2_x_proj, p2_y_proj],
-                 "x": [x_x_proj, x_y_proj],
-                 "x2": [x2_x_proj, x2_y_proj]}
-            For 3D, similarly with an entry for z.
+        Computes the momentum operator matrix elements directly through numerical integration:
+        <m|p|n> = -i*ħ∫ψ_m*(x)·(d/dx ψ_n(x)) dx
         """
-        # Helper to extract basis info for a given direction.
-        # If basis is a tuple, then use it for all directions.
-        def get_basis(direction):
-            if isinstance(basis, dict):
-                return basis.get(direction)
-            else:
-                return basis
+  
+        x_min = mesh[0]
+        x_max = mesh[-1]
+        p_matrix = lil_matrix((N, N), dtype=complex)
+        quad_options = {
+            'limit': self.limit_divisions if self.limit_divisions else (N + int(0.1 * N)),
+            'epsabs': 1.49e-6,
+            'epsrel': 1.49e-6
+        }
 
-        # For each direction, retrieve the basis info.
-        if self.dim == 1:
-            basis_x = get_basis("x")
-            # Unpack basis info: (fn, x0, x1, dx, N)
-            fn_x, x0_x, x1_x, dx_x, N_x = basis_x
-            p_proj  = self.project_p(self.px, fn_x, x0_x, x1_x, dx_x, N_x)
-            p2_proj = self.project_p2(self.px2, fn_x, x0_x, x1_x, dx_x, N_x)
-            x_proj  = self.project_x(self.x, fn_x, x0_x, x1_x, dx_x, N_x)
-            x2_proj = self.project_x2(self.x2, fn_x, x0_x, x1_x, dx_x, N_x)
-            proj_ops = {"p": p_proj, "p2": p2_proj, "x": x_proj, "x2": x2_proj}
+        def integrate_element(pair):
+            m, n = pair
+            def integrand(x):
+                psi_m, _, _ = fn(m, x)
+                _, dpsi_n, _ = fn(n, x)
+                return np.conj(psi_m) * dpsi_n
+            result, _ = quad(integrand, x_min, x_max, **quad_options)
+            if abs(result) <= 1e-10:
+                result = 0
+            return (m, n, -1j * self.hbar * result)
 
-        elif self.dim == 2:
-            basis_x = get_basis("x")
-            basis_y = get_basis("y")
-            # If basis_y is None, use basis_x for both directions.
-            if basis_y is None:
-                basis_y = basis_x
+        tasks = [(m, n) for m in range(N) for n in range(N)]
+        with ThreadPoolExecutor() as executor:
+            for m, n, value in executor.map(integrate_element, tasks):
+                p_matrix[m, n] = value
+        return p_matrix.tocsr()
 
-            fn_x, x0_x, x1_x, dx_x, N_x = basis_x
-            fn_y, x0_y, x1_y, dx_y, N_y = basis_y
-
-            p_proj_x  = self.project_p(self.px, fn_x, x0_x, x1_x, dx_x, N_x)
-            p_proj_y  = self.project_p(self.py, fn_y, x0_y, x1_y, dx_y, N_y)
-            p2_proj_x = self.project_p2(self.px2, fn_x, x0_x, x1_x, dx_x, N_x)
-            p2_proj_y = self.project_p2(self.py2, fn_y, x0_y, x1_y, dx_y, N_y)
-            x_proj_x  = self.project_x(self.x, fn_x, x0_x, x1_x, dx_x, N_x)
-            x_proj_y  = self.project_x(self.y, fn_y, x0_y, x1_y, dx_y, N_y)
-            x2_proj_x = self.project_x2(self.x2, fn_x, x0_x, x1_x, dx_x, N_x)
-            x2_proj_y = self.project_x2(self.y2, fn_y, x0_y, x1_y, dx_y, N_y)
-
-            proj_ops = {
-                "p":  [p_proj_x, p_proj_y],
-                "p2": [p2_proj_x, p2_proj_y],
-                "x":  [x_proj_x, x_proj_y],
-                "x2": [x2_proj_x, x2_proj_y]
-            }
-
-        elif self.dim == 3:
-            basis_x = get_basis("x")
-            basis_y = get_basis("y")
-            basis_z = get_basis("z")
-            if basis_y is None:
-                basis_y = basis_x
-            if basis_z is None:
-                basis_z = basis_x
-
-            fn_x, x0_x, x1_x, dx_x, N_x = basis_x
-            fn_y, x0_y, x1_y, dx_y, N_y = basis_y
-            fn_z, x0_z, x1_z, dx_z, N_z = basis_z
-            
-            p_proj_x  = self.project_p(self.px, fn_x, x0_x, x1_x, dx_x, N_x)
-            p_proj_y  = self.project_p(self.py, fn_y, x0_y, x1_y, dx_y, N_y)
-            p_proj_z  = self.project_p(self.pz, fn_z, x0_z, x1_z, dx_z, N_z)
-            p2_proj_x = self.project_p2(self.px2, fn_x, x0_x, x1_x, dx_x, N_x)
-            p2_proj_y = self.project_p2(self.py2, fn_y, x0_y, x1_y, dx_y, N_y)
-            p2_proj_z = self.project_p2(self.pz2, fn_z, x0_z, x1_z, dx_z, N_z)
-            x_proj_x  = self.project_x(self.x, fn_x, x0_x, x1_x, dx_x, N_x)
-            x_proj_y  = self.project_x(self.y, fn_y, x0_y, x1_y, dx_y, N_y)
-            x_proj_z  = self.project_x(self.z, fn_z, x0_z, x1_z, dx_z, N_z)
-            x2_proj_x = self.project_x2(self.x2, fn_x, x0_x, x1_x, dx_x, N_x)
-            x2_proj_y = self.project_x2(self.y2, fn_y, x0_y, x1_y, dx_y, N_y)
-            x2_proj_z = self.project_x2(self.z2, fn_z, x0_z, x1_z, dx_z, N_z)
-
-            proj_ops = {
-                "p":  [p_proj_x, p_proj_y, p_proj_z],
-                "p2": [p2_proj_x, p2_proj_y, p2_proj_z],
-                "x":  [x_proj_x, x_proj_y, x_proj_z],
-                "x2": [x2_proj_x, x2_proj_y, x2_proj_z]
-            }
-        else:
-            raise ValueError("Unsupported dimension: {}".format(self.dim))
-
-        return proj_ops
-
-    def project_p(self, p_matrix, fn, x0, x1, dx, N):
+    def compute_p2_matrix(self, fn, mesh, N):
         """
-        Compute the matrix representation of the momentum operator in an eigenstate basis.
-        
-        This function projects the momentum operator (defined in the position basis using a 7-point
-        central difference scheme) onto an eigenstate basis. The momentum operator in the position basis is:
-        
-        .. math::
-            \hat{p} = -i \frac{d}{dx} \quad (\hbar = 1)
-    
-        and its 7-point discretization is given by:
-        
-        .. math::
-            f'(x) \approx \frac{1}{60h} \left[f(x-3h) - 9f(x-2h) + 45f(x-h) - 45f(x+h) + 9f(x+2h) - f(x+3h)\right].
-    
-        The matrix elements in the eigenbasis are computed as:
-        
-        .. math::
-            P_{mn} = dx \sum_{j} \psi_m^*(x_j) \left[\hat{p}\,\psi_n\right](x_j)
-    
-        where :math:`\psi_n(x)` is the discretized eigenstate given by ``fn(n, x0, x1, dx)``.
-    
-        Parameters
-        ----------
-        fn : callable
-            Function that returns the discretized eigenstate for a given index.
-            It should accept parameters (n, x0, x1, dx) and return a 1D NumPy array.
-        x0 : float
-            Lower bound of the spatial domain.
-        x1 : float
-            Upper bound of the spatial domain.
-        dx : float
-            Grid spacing.
-        N : int
-            Number of eigenstates (and the dimension of the discretized position space).
-    
-        Returns
-        -------
-        numpy.ndarray or scipy.sparse.spmatrix
-            An (N × N) complex matrix representing the momentum operator in the eigenstate basis.
-        """
-        
-        # Precompute the eigenstate basis.
-        # Each column of Psi corresponds to an eigenstate (assumed discretized on the same grid).
-        Psi = np.array([fn(n, x0, x1, dx) for n in range(N)]).T  # Shape: (grid_points, N)
-        
-        # Compute the matrix elements via discretized integration (using dx as weight).
-        p_mat = dx * Psi.conjugate().T @ (p_matrix @ Psi)
-        return p_mat
-    
-    def project_p2(self, p2_matrix, fn, x0, x1, dx, N):
-        """
-        Compute the matrix representation of the momentum-squared operator in an eigenstate basis.
-    
-        This function projects the momentum-squared operator (constructed in the position basis using a 7-point
-        central difference scheme) onto an eigenstate basis. The momentum-squared operator is defined as:
-        
-        .. math::
-            \hat{p}^2 = -\frac{d^2}{dx^2} \quad (\hbar = 1)
-    
-        with its 7-point discretization given by:
-        
-        .. math::
-            f''(x) \approx \frac{1}{180h^2} \left[-f(x-3h) + 12f(x-2h) - 39f(x-h) + 56f(x) - 39f(x+h) + 12f(x+2h) - f(x+3h)\right].
-    
-        The matrix elements are computed as:
-        
-        .. math::
-            (P^2)_{mn} = dx \sum_{j} \psi_m^*(x_j) \left[\hat{p}^2\,\psi_n\right](x_j)
-    
-        Parameters
-        ----------
-        fn : callable
-            Function that returns the discretized eigenstate for a given index.
-        x0 : float
-            Lower bound of the spatial domain.
-        x1 : float
-            Upper bound of the spatial domain.
-        dx : float
-            Grid spacing.
-        N : int
-            Number of eigenstates (and the dimension of the discretized position space).
-    
-    
-        Returns
-        -------
-        numpy.ndarray or scipy.sparse.spmatrix
-            An (N × N) matrix representing the momentum-squared operator in the eigenstate basis.
-        """
-        
-        # Precompute the eigenstate basis.
-        Psi = np.array([fn(n, x0, x1, dx) for n in range(N)]).T
-        
-        # Compute the matrix elements via discretized integration.
-        p2_mat = dx * Psi.conjugate().T @ (p2_matrix @ Psi)
-        return p2_mat
-    
-    def project_x(self, x_matrix, fn, x0, x1, dx, N):
-        """
-        Compute the matrix representation of the position operator in an eigenstate basis.
-    
-        The position operator in the position basis is diagonal with entries corresponding to the spatial
-        grid points. This function projects the operator onto the eigenstate basis using:
-        
-        .. math::
-            X_{mn} = dx \sum_{j} \psi_m^*(x_j)\, x_j\, \psi_n(x_j)
-    
-        Parameters
-        ----------
-        fn : callable
-            Function that returns the discretized eigenstate for a given index.
-        x0 : float
-            Lower bound of the spatial domain.
-        x1 : float
-            Upper bound of the spatial domain.
-        dx : float
-            Grid spacing.
-        N : int
-            Number of eigenstates (and the dimension of the discretized position space).
-    
-        Returns
-        -------
-        numpy.ndarray or scipy.sparse.spmatrix
-            An (N × N) matrix representing the position operator in the eigenstate basis.
-        """
-         
-        # Precompute the eigenstate basis.
-        Psi = np.array([fn(n, x0, x1, dx) for n in range(N)]).T
-        
-        # Compute the matrix elements via discretized integration.
-        x_mat = dx * Psi.conjugate().T @ (x_matrix @ Psi)
-        return x_mat
-    
-    def project_x2(self, x2_matrix, fn, x0, x1, dx, N):
-        """
-        Compute the matrix representation of the squared position operator in an eigenstate basis.
-    
-        This function projects the squared position operator, defined in the position basis as
-        :math:`\hat{x}^2`, onto an eigenstate basis. The operator in the position basis is given by:
-    
-        .. math::
-            (\hat{x}^2)_{ij} = x_i^2 \, \delta_{ij},
-    
-        where the grid points :math:`x_i` are defined on the interval (x0, x1) with spacing `dx`.
-        The matrix elements in the eigenbasis are computed as:
-    
-        .. math::
-            (X^2)_{mn} = dx \sum_{j} \psi_m^*(x_j) \, x_j^2 \, \psi_n(x_j)
-    
-        where :math:`\psi_n(x)` is the discretized eigenstate provided by ``fn(n, x0, x1, dx)``.
-    
-        Parameters
-        ----------
-        fn : callable
-            Function that returns the discretized eigenstate for a given index.
-            It should accept parameters (n, x0, x1, dx) and return a 1D NumPy array.
-        x0 : float
-            Lower bound of the spatial domain.
-        x1 : float
-            Upper bound of the spatial domain.
-        dx : float
-            Grid spacing between adjacent points.
-        N : int
-            Number of eigenstates (and the dimension of the discretized position space).
-    
-        Returns
-        -------
-        numpy.ndarray or scipy.sparse.spmatrix
-            An (N × N) matrix representing the squared position operator in the eigenstate basis.
+        Computes the squared momentum operator matrix elements directly through numerical integration:
+        <m|p²|n> = -ħ²∫ψ_m*(x)·(d²/dx² ψ_n(x)) dx
         """
 
-        
-        # Precompute the eigenstate basis.
-        # Each column corresponds to an eigenstate (discretized on the same grid).
-        Psi = np.array([fn(n, x0, x1, dx) for n in range(N)]).T  # Shape: (grid_points, N)
-        
-        # Compute the matrix elements via discretized integration.
-        x2_mat = dx * Psi.conjugate().T @ (x2_matrix @ Psi)
-        return x2_mat
+        x_min = mesh[0]
+        x_max = mesh[-1]
+        p2_matrix = lil_matrix((N, N), dtype=complex)
+        quad_options = {
+            'limit': self.limit_divisions if self.limit_divisions else (N + int(0.1 * N)),
+            'epsabs': 1.49e-6,
+            'epsrel': 1.49e-6
+        }
+
+        def integrate_element(pair):
+            m, n = pair
+            def integrand(x):
+                psi_m, _, _ = fn(m, x)
+                _, _, d2psi_n = fn(n, x)
+                return np.conj(psi_m) * d2psi_n
+            result, _ = quad(integrand, x_min, x_max, **quad_options)
+            if abs(result) <= 1e-10:
+                result = 0
+            return (m, n, -self.hbar**2 * result)
+
+        tasks = [(m, n) for m in range(N) for n in range(N)]
+        with ThreadPoolExecutor() as executor:
+            for m, n, value in executor.map(integrate_element, tasks):
+                p2_matrix[m, n] = value
+        return p2_matrix.tocsr()
+
+    def compute_x_matrix(self, fn, mesh, N):
+        """
+        Computes the position operator matrix elements directly through numerical integration:
+        <m|x|n> = ∫ψ_m*(x)·x·ψ_n(x) dx
+        """
+
+        x_min = mesh[0]
+        x_max = mesh[-1]
+        x_matrix = lil_matrix((N, N), dtype=complex)
+        quad_options = {'limit': self.limit_divisions, 'epsabs': 1.49e-6, 'epsrel': 1.49e-6}
+
+        def integrate_element(pair):
+            m, n = pair
+            def integrand(x):
+                psi_m, _, _ = fn(m, x)
+                psi_n, _, _ = fn(n, x)
+                return np.conj(psi_m) * x * psi_n
+            result, _ = quad(integrand, x_min, x_max, **quad_options)
+            if abs(result) <= 1e-10:
+                result = 0
+            return (m, n, result)
+
+        tasks = [(m, n) for m in range(N) for n in range(N)]
+        with ThreadPoolExecutor() as executor:
+            for m, n, value in executor.map(integrate_element, tasks):
+                x_matrix[m, n] = value
+        return x_matrix.tocsr()
+
+    def compute_x2_matrix(self, fn, mesh, N):
+        """
+        Computes the squared position operator matrix elements directly through numerical integration:
+        <m|x²|n> = ∫ψ_m*(x)·x²·ψ_n(x) dx
+        """
+        from scipy.sparse import lil_matrix
+        from scipy.integrate import quad
+        import numpy as np
+        from concurrent.futures import ThreadPoolExecutor
+
+        x_min = mesh[0]
+        x_max = mesh[-1]
+        x2_matrix = lil_matrix((N, N), dtype=complex)
+        quad_options = {
+            'limit': self.limit_divisions if self.limit_divisions else (N + int(0.1 * N)),
+            'epsabs': 1.49e-6,
+            'epsrel': 1.49e-6
+        }
+
+        def integrate_element(pair):
+            m, n = pair
+            def integrand(x):
+                psi_m, _, _ = fn(m, x)
+                psi_n, _, _ = fn(n, x)
+                return np.conj(psi_m) * (x**2) * psi_n
+            result, _ = quad(integrand, x_min, x_max, **quad_options)
+            if abs(result) <= 1e-10:
+                result = 0
+            return (m, n, result)
+
+        tasks = [(m, n) for m in range(N) for n in range(N)]
+        with ThreadPoolExecutor() as executor:
+            for m, n, value in executor.map(integrate_element, tasks):
+                x2_matrix[m, n] = value
+        return x2_matrix.tocsr()
+
+
 
 
 
@@ -801,88 +720,205 @@ class canonic_ops:
 # ----------------------------------------------------------
 
 class Hamiltonian:
-    def __init__(self, H, mesh, other_subspaces_dims=None):
+    def __init__(self, H, mesh, basis=None, other_subspaces_dims=None):
         """
         Parameters
         ----------
         H : sparse matrix
             The Hamiltonian operator defined on the interior points (after applying Dirichlet BC).
         mesh : object
-            A mesh object that contains the grid information and has an attribute "dims" (1, 2, or 3).
-            It is assumed that the mesh object also stores the full 1D grids as self.mesh_x, etc.,
-            and the number of grid points as self.Nx (and self.Ny, self.Nz where appropriate),
-            and that the bounds are unpacked as self.x0, self.x1, etc.
-        other_subspaces : list[int], optional
-            List of integers. Will be used to determine how to reshape the obtained wavefunctions.
+            A mesh object that contains the grid information. It should have:
+                - an attribute dims (1, 2 or 3);
+                - full 1D grid arrays (e.g. mesh.mesh_x, mesh.mesh_y, etc.);
+                - the number of grid points (e.g. mesh.Nx, mesh.Ny, ...);
+                - domain bounds (e.g. mesh.x0, mesh.x1, etc.).
+            It is assumed that the operators act on the interior nodes (mesh.[...][1:-1]).
+        basis : tuple or dict or None
+            Basis information. Either a single tuple (fn, N) to be used for all directions,
+            or a dict with keys "x", "y", (and "z") for higher dimensions. If provided, the eigenvectors
+            from solve() are the expansion coefficients in this eigenbasis.
+        other_subspaces_dims : list[int], optional
+            List of integers for extra tensor–product dimensions. These dimensions will be prepended 
+            (or later traced over) when reshaping the eigenvectors.
         """
         self.H = H
-        self.mesh = mesh  # the mesh object containing grid information
+        self.mesh = mesh
+        self.basis = basis
+        self.other_subspaces_dims = other_subspaces_dims
         self.energies = None
         self.wavefunctions = None
-        self.other_subspaces_dims = other_subspaces_dims
-        if self.other_subspaces_dims: # if other_subspaces_dims is NOT None
+        self.densities = None
+
+        if self.other_subspaces_dims:
             if any(not isinstance(dim, int) for dim in self.other_subspaces_dims):
                 raise ValueError("other_subspaces_dims must be a list of integers")
-
+                
     def solve(self, k):
         """
-        Diagonalizes the Hamiltonian and stores the energies and reshaped wavefunctions.
-
+        Diagonalizes the Hamiltonian and stores the eigenvalues and eigenvector coefficients.
+        The eigenvectors are first computed in either the coordinate (grid) basis when basis is None,
+        or as expansion coefficients when basis is provided, and then reconstructed to physical space
+        before computing densities and normalizing.
+        
         Parameters
         ----------
         k : int
-            The number of eigenvalues/eigenfunctions to compute.
+            Number of eigenpairs to compute.
             
-        The method computes:
-            energies, eigenvectors = eigsh(H, k=k, which="SM")
-        and then reshapes each eigenvector according to the mesh dimensionality. The interior
-        grid in each coordinate has length (N-2) due to Dirichlet boundary conditions.
-        Finally, it orders the eigenpairs in increasing order of energy.
+        Returns
+        -------
+        energies : ndarray
+            Sorted eigenvalues.
+        wavefunctions : list of ndarrays
+            The reconstructed physical-space wavefunctions.
         """
-        # Diagonalize the sparse Hamiltonian.
+
         energies, eigvecs = eigsh(self.H, k=k, which="SM")
-        # Order the eigenvalues and eigenvectors in increasing order.
         order = np.argsort(energies)
         energies = energies[order]
         eigvecs = eigvecs[:, order]
-        
-        # Determine the shape to which each eigenvector must be reshaped.
+    
+        # Decide on the reshaping dimensions.
         if self.mesh.dims == 1:
-            if not self.other_subspaces_dims: # if other_subspaces_dims is None
-                new_shape = (self.mesh.Nx - 2,)
+            if self.basis is None:
+                dim_primary = self.mesh.Nx - 2
             else:
-                new_shape = tuple(self.other_subspaces_dims) + (self.mesh.Nx - 2,)
+                # When basis is provided, use the basis tuple's second entry
+                b = self.basis["x"] if isinstance(self.basis, dict) else self.basis
+                _, dim_primary = b
+            raw_shape = (dim_primary,) if not self.other_subspaces_dims else tuple(self.other_subspaces_dims) + (dim_primary,)
         elif self.mesh.dims == 2:
-            if not self.other_subspaces_dims: # if other_subspaces_dims is None
-                new_shape = (self.mesh.Nx - 2, self.mesh.Ny - 2)
+            if self.basis is None:
+                dim_x = self.mesh.Nx - 2
+                dim_y = self.mesh.Ny - 2
             else:
-                 new_shape = tuple(self.other_subspaces_dims) + (self.mesh.Nx - 2, self.mesh.Ny - 2)
+                if isinstance(self.basis, dict):
+                    b_x = self.basis["x"]
+                    b_y = self.basis["y"]
+                else:
+                    b_x = b_y = self.basis
+                _, dim_x = b_x
+                _, dim_y = b_y
+            raw_shape = (dim_x, dim_y) if not self.other_subspaces_dims else tuple(self.other_subspaces_dims) + (dim_x, dim_y)
         elif self.mesh.dims == 3:
-            if not self.other_subspaces_dims: # if other_subspaces_dims is None
-                new_shape = (self.mesh.Nx - 2, self.mesh.Ny - 2, self.mesh.Nz - 2)
+            if self.basis is None:
+                dim_x = self.mesh.Nx - 2
+                dim_y = self.mesh.Ny - 2
+                dim_z = self.mesh.Nz - 2
             else:
-                new_shape = tuple(self.other_subspaces_dims) + (self.mesh.Nx - 2, self.mesh.Ny - 2, self.mesh.Nz - 2)
+                if isinstance(self.basis, dict):
+                    b_x = self.basis["x"]
+                    b_y = self.basis["y"]
+                    b_z = self.basis["z"]
+                else:
+                    b_x = b_y = b_z = self.basis
+                _, dim_x = b_x
+                _, dim_y = b_y
+                _, dim_z = b_z
+            raw_shape = (dim_x, dim_y, dim_z) if not self.other_subspaces_dims else tuple(self.other_subspaces_dims) + (dim_x, dim_y, dim_z)
         else:
             raise ValueError("Mesh dimensionality must be 1, 2, or 3.")
-            
-        # Reshape each eigenvector (note: eigvecs.T has shape (k, N_interior)).
-        wavefunctions = [vec.reshape(new_shape) for vec in eigvecs.T]
+    
+        # Reshape eigenvectors in their raw form (grid basis or expansion coefficients)
+        raw_wavefunctions = [vec.reshape(raw_shape) for vec in eigvecs.T] 
+
+        # Handle subspace trace operations if needed
+        if self.other_subspaces_dims:
+            for _ in range(len(self.other_subspaces_dims)):
+                raw_wavefunctions = [np.sum(vec, axis=0) for vec in raw_wavefunctions]
         
-        if self.other_subspaces_dims: # if other_subspaces_dims is NOT None
-            to_be_traced_over = len(self.other_subspaces_dims)
-            for _ in range(to_be_traced_over):
-                wavefunctions = [np.sum(vec, axis=0) for vec in wavefunctions] # Tracing over non-orbital degrees of freedom        
-            
-        densities = [np.abs(wavefunction)**2 for wavefunction in wavefunctions]
-        # Normalization
-        wavefunctions = [wavefunction / np.sqrt(np.sum(density)) for wavefunction,density in zip(wavefunctions, densities)]
-        densities = [np.abs(wavefunction)**2 for wavefunction in wavefunctions]
+        # Now reconstruct the physical-space wavefunctions
+        reconstructed_wavefunctions = []
+        for wf in raw_wavefunctions:
+            reconstructed_wavefunctions.append(self._reconstruct_wavefunction(wf))
         
+        # Calculate densities based on reconstructed wavefunctions
+        densities = [np.abs(wf)**2 for wf in reconstructed_wavefunctions]
+        
+        # Compute normalization factors using the mesh for proper integration
+        if self.mesh.dims == 1:
+            # Get 1D grid spacing for proper integration
+            dx = self.mesh.mesh_x[1] - self.mesh.mesh_x[0]  
+            norm_factors = [np.sum(density) * dx for density in densities]
+        elif self.mesh.dims == 2:
+            # Get 2D grid spacings
+            dx = self.mesh.mesh_x[1] - self.mesh.mesh_x[0]
+            dy = self.mesh.mesh_y[1] - self.mesh.mesh_y[0]
+            norm_factors = [np.sum(density) * dx * dy for density in densities]
+        elif self.mesh.dims == 3:
+            # Get 3D grid spacings
+            dx = self.mesh.mesh_x[1] - self.mesh.mesh_x[0]
+            dy = self.mesh.mesh_y[1] - self.mesh.mesh_y[0]
+            dz = self.mesh.mesh_z[1] - self.mesh.mesh_z[0]
+            norm_factors = [np.sum(density) * dx * dy * dz for density in densities]
+        
+        # Normalize the wavefunctions
+        normalized_wavefunctions = [wf / np.sqrt(norm) for wf, norm in zip(reconstructed_wavefunctions, norm_factors)]
+        
+        # Recalculate densities after normalization
+        normalized_densities = [np.abs(wf)**2 for wf in normalized_wavefunctions]
+        
+        # Save the results
         self.energies = energies
-        self.wavefunctions = wavefunctions
-        self.densities = densities
+        self.wavefunctions = normalized_wavefunctions
+        self.densities = normalized_densities
+    
+        return energies, normalized_wavefunctions
+
+    def _reconstruct_wavefunction(self, wf):
+        """
+        Reconstructs the physical-space wavefunction from the stored eigenfunction.
         
-        return energies, wavefunctions
+        If self.basis is provided, the expansion coefficients (wf) are combined with the corresponding basis
+        functions (evaluated on the mesh's interior grid arrays). If self.basis is None, then wf is assumed to be
+        already in the physical space.
+        
+        Returns
+        -------
+        psi : ndarray
+            The reconstructed physical-space wavefunction.
+        """
+        dims = self.mesh.dims
+        
+        # When no basis is provided, the wavefunction is already physical
+        if self.basis is None:
+            return  wf
+        else:
+            # Basis provided: reconstruct using the expansion
+            if dims == 1:
+                # Expect basis to be a tuple (fn, N) or dict entry
+                b_tuple = self.basis["x"] if isinstance(self.basis, dict) else self.basis
+                fn, N_basis = b_tuple
+                # Evaluate the basis functions on the mesh's interior grid
+                basis_mat = np.stack([fn(n, self.mesh.mesh_x[1:-1])[0] for n in range(N_basis)], axis=0)  # shape (N_basis, len(self.mesh.mesh_x[1:-1]))
+                psi = basis_mat.T @ wf.reshape(-1)
+                return psi
+            elif dims == 2:
+                if not isinstance(self.basis, dict):
+                    b_dict = {"x": self.basis, "y": self.basis}
+                else:
+                    b_dict = self.basis
+                fnx, _ = b_dict["x"]
+                fny, _ = b_dict["y"]
+                
+                basis_x = np.stack([fnx(i, self.mesh.mesh_x[1:-1])[0] for i in range(b_dict["x"][1])], axis=0)
+                basis_y = np.stack([fny(j, self.mesh.mesh_y[1:-1])[0] for j in range(b_dict["y"][1])], axis=0)
+                psi = np.einsum('ij,im,jn->mn', wf, basis_x, basis_y)
+                return psi
+            elif dims == 3:
+                if not isinstance(self.basis, dict):
+                    b_dict = {"x": self.basis, "y": self.basis, "z": self.basis}
+                else:
+                    b_dict = self.basis
+                fnx, _ = b_dict["x"]
+                fny, _ = b_dict["y"]
+                fnz, _ = b_dict["z"]
+
+                basis_x = np.stack([fnx(i, self.mesh.mesh_x[1:-1])[0] for i in range(b_dict["x"][1])], axis=0)
+                basis_y = np.stack([fny(j, self.mesh.mesh_y[1:-1])[0] for j in range(b_dict["y"][1])], axis=0)
+                basis_z = np.stack([fnz(k, self.mesh.mesh_z[1:-1])[0] for k in range(b_dict["z"][1])], axis=0)
+                psi = np.einsum('ijk,im,jn,ko->mno', wf, basis_x, basis_y, basis_z)
+                return psi
 
     def plot(self, 
              wf_index:int =0, 
@@ -917,6 +953,7 @@ class Hamiltonian:
         if dims == 1:
             # For 1D, use the interior grid points.
             x = self.mesh.mesh_x[1:-1]
+        
             plt.figure()
             plt.plot(x, density, '-', c = c)
             plt.xlabel("x")
@@ -985,7 +1022,7 @@ class Hamiltonian:
             global_max = np.max(density)
             
             # Define several isosurface levels.
-            iso_levels = np.linspace(global_min * 1.001, global_max * 0.999, n_surfaces)
+            iso_levels = np.linspace(global_min * 1.1, global_max * 0.9, n_surfaces)
             
             # Approximate spacing between grid points (assumes uniformity).
             spacing = (xvals[1] - xvals[0], yvals[1] - yvals[0], zvals[1] - zvals[0])
@@ -1049,7 +1086,9 @@ class Hamiltonian:
             fig.show()
 
         else:
-            raise ValueError("Mesh dimensionality must be 1, 2, or 3.")
+            raise ValueError("Mesh dimensionality must be 1, 2, or 3.") 
+
+
 
 
 
