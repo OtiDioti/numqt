@@ -229,11 +229,8 @@ class canonic_ops:
     def __init__(self, mesh, ops_to_compute, basis=None, additional_subspaces=None, limit_divisions=None, hbar=1):
         """
         Constructs the discretized quantum mechanical operators for position and momentum.
-        Only computes the canonical operators specified in the ops_to_compute list,
-        which should contain strings such as "p", "p2", "x", "x2".
-        
-        For example, if ops_to_compute=["p2", "x2"], then only the p^2 and x^2 operators
-        are computed along each dimension.
+        If a basis is provided then the operators are computed via numerical integration,
+        otherwise finite-difference approximations are used.
         
         Parameters
         ----------
@@ -242,30 +239,26 @@ class canonic_ops:
             returning the 1D grid arrays. For dims==1, get_grids() returns a 1D array;
             for dims==2, it returns (mesh_x, mesh_y); for dims==3, (mesh_x, mesh_y, mesh_z).
         ops_to_compute : list of str
-            A list of strings indicating which canonical operators to compute. Valid strings 
-            are "p", "p2", "x", and "x2".
+            Valid strings are "p", "p2", "x", and "x2". Only those operators will be computed.
         basis : tuple or dict or None, optional
-            Basis information. Either a single tuple (fn, N) to be used for all directions,
-            or a dict with keys "x", "y", (and "z") for higher dimensions. 
+            If given, integration-based routines will be used. Either a single tuple (fn, N)
+            for all directions, or a dict with keys "x", "y", and (optionally) "z".
         additional_subspaces : list, optional
-            A list with the structure [position, I_second, I_third, ...] used to embed the operator
-            into a tensor product space (when no basis is given).
+            A list of extra subspaces that will be used for embedding. The way they are
+            incorporated depends on the dimensionality.
         limit_divisions : int, optional
-            Number of divisions to take when numerically integrating (only used for "tight_binding").
+            Controls the adaptive quadrature settings for integration.
         hbar : float, optional
-            Planck's constant (defaults to 1).
+            Planck’s constant (default 1).
         """
-        from scipy.sparse import eye, kron
-        import numpy as np
-
         self.hbar = hbar
-        self.dim = mesh.dims
+        self.ops_to_compute = ops_to_compute
         self.basis = basis
         self.additional_subspaces = additional_subspaces
         self.limit_divisions = limit_divisions
-        self.ops_to_compute = ops_to_compute  # List of operator names to compute
 
         # Get the mesh grids (all operators are only defined on interior points)
+        self.dim = mesh.dims
         if self.dim == 1:
             self.mesh_x = mesh.get_grids()  # 1D array
             self.Nx_grid = len(self.mesh_x) - 2
@@ -279,17 +272,17 @@ class canonic_ops:
             self.Ny_grid = len(self.mesh_y) - 2
             self.Nz_grid = len(self.mesh_z) - 2
 
-        # Use basis integration routines if a basis is provided;
-        # otherwise, use finite-difference approximations.
         if self.basis is None:
-            # Pre-construct identity matrices on the interior grid for embedding.
+            # Finite difference (discretized) operators.
+            # Precompute identity matrices for interior grid embedding.
             I_x = eye(self.Nx_grid, format='csr')
             if self.dim >= 2:
                 I_y = eye(self.Ny_grid, format='csr')
             if self.dim == 3:
                 I_z = eye(self.Nz_grid, format='csr')
-            
+
             # Build additional subspace lists.
+            additional_x, additional_y, additional_z = None, None, None
             if additional_subspaces is None:
                 if self.dim == 1:
                     additional_x = [0]
@@ -301,7 +294,6 @@ class canonic_ops:
                     additional_y = [1, I_x, I_z]
                     additional_z = [2, I_x, I_y]
             else:
-                # Embed operator into provided additional subspaces.
                 if self.dim == 1:
                     additional_x = [len(additional_subspaces)] + additional_subspaces
                 elif self.dim == 2:
@@ -311,8 +303,8 @@ class canonic_ops:
                     additional_x = [len(additional_subspaces)] + additional_subspaces + [I_y, I_z]
                     additional_y = [len(additional_subspaces)+1] + additional_subspaces + [I_x, I_z]
                     additional_z = [len(additional_subspaces)+2] + additional_subspaces + [I_x, I_y]
-            
-            # Compute finite-difference based operators only if requested.
+
+            # Now compute the finite difference operators.
             if self.dim == 1:
                 if "p" in self.ops_to_compute:
                     self.px = self.p(self.mesh_x, additional_x)
@@ -353,7 +345,8 @@ class canonic_ops:
                     self.y2_op = self.x2(self.mesh_y, additional_y)
                     self.z2_op = self.x2(self.mesh_z, additional_z)
         else:
-            # If a basis is given, use direct numerical integration routines.
+            # Basis is given; use numerical integration routines.
+            # Helper to extract basis info per direction.
             def get_basis(direction):
                 if isinstance(self.basis, dict):
                     return self.basis.get(direction)
@@ -363,14 +356,18 @@ class canonic_ops:
             if self.dim == 1:
                 basis_x = get_basis("x")
                 fn_x, N_basis_x = basis_x
+                # Build additional embedding.
+                additional_x = None
+                if additional_subspaces is not None:
+                    additional_x = [len(additional_subspaces)] + additional_subspaces
                 if "p" in self.ops_to_compute:
-                    self.px = self.compute_p_matrix(fn_x, self.mesh_x, N_basis_x)
+                    self.px = self.compute_p_matrix(fn_x, self.mesh_x, N_basis_x, additional=additional_x)
                 if "p2" in self.ops_to_compute:
-                    self.px2 = self.compute_p2_matrix(fn_x, self.mesh_x, N_basis_x)
+                    self.px2 = self.compute_p2_matrix(fn_x, self.mesh_x, N_basis_x, additional=additional_x)
                 if "x" in self.ops_to_compute:
-                    self.x_op = self.compute_x_matrix(fn_x, self.mesh_x, N_basis_x)
+                    self.x_op = self.compute_x_matrix(fn_x, self.mesh_x, N_basis_x, additional=additional_x)
                 if "x2" in self.ops_to_compute:
-                    self.x2_op = self.compute_x2_matrix(fn_x, self.mesh_x, N_basis_x)
+                    self.x2_op = self.compute_x2_matrix(fn_x, self.mesh_x, N_basis_x, additional=additional_x)
             elif self.dim == 2:
                 basis_x = get_basis("x")
                 basis_y = get_basis("y")
@@ -379,35 +376,40 @@ class canonic_ops:
                 fn_x, N_basis_x = basis_x
                 fn_y, N_basis_y = basis_y
 
-                if "p" in self.ops_to_compute:
-                    p_x = self.compute_p_matrix(fn_x, self.mesh_x, N_basis_x)
-                    p_y = self.compute_p_matrix(fn_y, self.mesh_y, N_basis_y)
-                if "p2" in self.ops_to_compute:
-                    p2_x = self.compute_p2_matrix(fn_x, self.mesh_x, N_basis_x)
-                    p2_y = self.compute_p2_matrix(fn_y, self.mesh_y, N_basis_y)
-                if "x" in self.ops_to_compute:
-                    x_op = self.compute_x_matrix(fn_x, self.mesh_x, N_basis_x)
-                    y_op = self.compute_x_matrix(fn_y, self.mesh_y, N_basis_y)
-                if "x2" in self.ops_to_compute:
-                    x2_op = self.compute_x2_matrix(fn_x, self.mesh_x, N_basis_x)
-                    y2_op = self.compute_x2_matrix(fn_y, self.mesh_y, N_basis_y)
+                # Build embedding lists with extra identities.
+                additional_x = additional_y = None
+                if additional_subspaces is not None:
+                    I_y = eye(N_basis_y, format='csr')
+                    I_x = eye(N_basis_x, format='csr')
+                    additional_x = [len(additional_subspaces)] + additional_subspaces + [I_y]
+                    additional_y = [len(additional_subspaces)+1] + additional_subspaces + [I_x]
 
-                # Build identities and embed via tensor products
-                from scipy.sparse import eye, kron
-                I_x = eye(N_basis_x, format='csr')
-                I_y = eye(N_basis_y, format='csr')
                 if "p" in self.ops_to_compute:
-                    self.px = kron(p_x, I_y, format='csr')
-                    self.py = kron(I_x, p_y, format='csr')
+                    p_x = self.compute_p_matrix(fn_x, self.mesh_x, N_basis_x, additional=additional_x)
+                    p_y = self.compute_p_matrix(fn_y, self.mesh_y, N_basis_y, additional=additional_y)
                 if "p2" in self.ops_to_compute:
-                    self.px2 = kron(p2_x, I_y, format='csr')
-                    self.py2 = kron(I_x, p2_y, format='csr')
+                    p2_x = self.compute_p2_matrix(fn_x, self.mesh_x, N_basis_x, additional=additional_x)
+                    p2_y = self.compute_p2_matrix(fn_y, self.mesh_y, N_basis_y, additional=additional_y)
                 if "x" in self.ops_to_compute:
-                    self.x_op = kron(x_op, I_y, format='csr')
-                    self.y_op = kron(I_x, y_op, format='csr')
+                    x_op = self.compute_x_matrix(fn_x, self.mesh_x, N_basis_x, additional=additional_x)
+                    y_op = self.compute_x_matrix(fn_y, self.mesh_y, N_basis_y, additional=additional_y)
                 if "x2" in self.ops_to_compute:
-                    self.x2_op = kron(x2_op, I_y, format='csr')
-                    self.y2_op = kron(I_x, y2_op, format='csr')
+                    x2_op = self.compute_x2_matrix(fn_x, self.mesh_x, N_basis_x, additional=additional_x)
+                    y2_op = self.compute_x2_matrix(fn_y, self.mesh_y, N_basis_y, additional=additional_y)
+
+                # Embed via tensor products.
+                if "p" in self.ops_to_compute:
+                    self.px = kron(p_x, eye(N_basis_y, format='csr'), format='csr')
+                    self.py = kron(eye(N_basis_x, format='csr'), p_y, format='csr')
+                if "p2" in self.ops_to_compute:
+                    self.px2 = kron(p2_x, eye(N_basis_y, format='csr'), format='csr')
+                    self.py2 = kron(eye(N_basis_x, format='csr'), p2_y, format='csr')
+                if "x" in self.ops_to_compute:
+                    self.x_op = kron(x_op, eye(N_basis_y, format='csr'), format='csr')
+                    self.y_op = kron(eye(N_basis_x, format='csr'), y_op, format='csr')
+                if "x2" in self.ops_to_compute:
+                    self.x2_op = kron(x2_op, eye(N_basis_y, format='csr'), format='csr')
+                    self.y2_op = kron(eye(N_basis_x, format='csr'), y2_op, format='csr')
             elif self.dim == 3:
                 basis_x = get_basis("x")
                 basis_y = get_basis("y")
@@ -420,53 +422,57 @@ class canonic_ops:
                 fn_y, N_basis_y = basis_y
                 fn_z, N_basis_z = basis_z
 
-                if "p" in self.ops_to_compute:
-                    p_x = self.compute_p_matrix(fn_x, self.mesh_x, N_basis_x)
-                    p_y = self.compute_p_matrix(fn_y, self.mesh_y, N_basis_y)
-                    p_z = self.compute_p_matrix(fn_z, self.mesh_z, N_basis_z)
-                if "p2" in self.ops_to_compute:
-                    p2_x = self.compute_p2_matrix(fn_x, self.mesh_x, N_basis_x)
-                    p2_y = self.compute_p2_matrix(fn_y, self.mesh_y, N_basis_y)
-                    p2_z = self.compute_p2_matrix(fn_z, self.mesh_z, N_basis_z)
-                if "x" in self.ops_to_compute:
-                    x_op = self.compute_x_matrix(fn_x, self.mesh_x, N_basis_x)
-                    y_op = self.compute_x_matrix(fn_y, self.mesh_y, N_basis_y)
-                    z_op = self.compute_x_matrix(fn_z, self.mesh_z, N_basis_z)
-                if "x2" in self.ops_to_compute:
-                    x2_op = self.compute_x2_matrix(fn_x, self.mesh_x, N_basis_x)
-                    y2_op = self.compute_x2_matrix(fn_y, self.mesh_y, N_basis_y)
-                    z2_op = self.compute_x2_matrix(fn_z, self.mesh_z, N_basis_z)
+                # Build additional embedding lists.
+                additional_x = additional_y = additional_z = None
+                if additional_subspaces is not None:
+                    I_y = eye(N_basis_y, format='csr')
+                    I_z = eye(N_basis_z, format='csr')
+                    I_x = eye(N_basis_x, format='csr')
+                    additional_x = [len(additional_subspaces)] + additional_subspaces + [I_y, I_z]
+                    additional_y = [len(additional_subspaces)+1] + additional_subspaces + [I_x, I_z]
+                    additional_z = [len(additional_subspaces)+2] + additional_subspaces + [I_x, I_y]
 
-                # Build identities and embed via tensor products: ordering chosen as x ⊗ y ⊗ z.
-                from scipy.sparse import eye
-                I_x = eye(N_basis_x, format='csr')
-                I_y = eye(N_basis_y, format='csr')
-                I_z = eye(N_basis_z, format='csr')
                 if "p" in self.ops_to_compute:
-                    self.px = iterative_kron([p_x, I_y, I_z])
-                    self.py = iterative_kron([I_x, p_y, I_z])
-                    self.pz = iterative_kron([I_x, I_y, p_z])
+                    p_x = self.compute_p_matrix(fn_x, self.mesh_x, N_basis_x, additional=additional_x)
+                    p_y = self.compute_p_matrix(fn_y, self.mesh_y, N_basis_y, additional=additional_y)
+                    p_z = self.compute_p_matrix(fn_z, self.mesh_z, N_basis_z, additional=additional_z)
                 if "p2" in self.ops_to_compute:
-                    self.px2 = iterative_kron([p2_x, I_y, I_z])
-                    self.py2 = iterative_kron([I_x, p2_y, I_z])
-                    self.pz2 = iterative_kron([I_x, I_y, p2_z])
+                    p2_x = self.compute_p2_matrix(fn_x, self.mesh_x, N_basis_x, additional=additional_x)
+                    p2_y = self.compute_p2_matrix(fn_y, self.mesh_y, N_basis_y, additional=additional_y)
+                    p2_z = self.compute_p2_matrix(fn_z, self.mesh_z, N_basis_z, additional=additional_z)
                 if "x" in self.ops_to_compute:
-                    self.x_op = iterative_kron([x_op, I_y, I_z])
-                    self.y_op = iterative_kron([I_x, y_op, I_z])
-                    self.z_op = iterative_kron([I_x, I_y, z_op])
+                    x_op = self.compute_x_matrix(fn_x, self.mesh_x, N_basis_x, additional=additional_x)
+                    y_op = self.compute_x_matrix(fn_y, self.mesh_y, N_basis_y, additional=additional_y)
+                    z_op = self.compute_x_matrix(fn_z, self.mesh_z, N_basis_z, additional=additional_z)
                 if "x2" in self.ops_to_compute:
-                    self.x2_op = iterative_kron([x2_op, I_y, I_z])
-                    self.y2_op = iterative_kron([I_x, y2_op, I_z])
-                    self.z2_op = iterative_kron([I_x, I_y, z2_op])
+                    x2_op = self.compute_x2_matrix(fn_x, self.mesh_x, N_basis_x, additional=additional_x)
+                    y2_op = self.compute_x2_matrix(fn_y, self.mesh_y, N_basis_y, additional=additional_y)
+                    z2_op = self.compute_x2_matrix(fn_z, self.mesh_z, N_basis_z, additional=additional_z)
+
+                # Embed via tensor products in ordering x ⊗ y ⊗ z.
+                if "p" in self.ops_to_compute:
+                    self.px = iterative_kron([p_x, eye(N_basis_y, format='csr'), eye(N_basis_z, format='csr')])
+                    self.py = iterative_kron([eye(N_basis_x, format='csr'), p_y, eye(N_basis_z, format='csr')])
+                    self.pz = iterative_kron([eye(N_basis_x, format='csr'), eye(N_basis_y, format='csr'), p_z])
+                if "p2" in self.ops_to_compute:
+                    self.px2 = iterative_kron([p2_x, eye(N_basis_y, format='csr'), eye(N_basis_z, format='csr')])
+                    self.py2 = iterative_kron([eye(N_basis_x, format='csr'), p2_y, eye(N_basis_z, format='csr')])
+                    self.pz2 = iterative_kron([eye(N_basis_x, format='csr'), eye(N_basis_y, format='csr'), p2_z])
+                if "x" in self.ops_to_compute:
+                    self.x_op = iterative_kron([x_op, eye(N_basis_y, format='csr'), eye(N_basis_z, format='csr')])
+                    self.y_op = iterative_kron([eye(N_basis_x, format='csr'), y_op, eye(N_basis_z, format='csr')])
+                    self.z_op = iterative_kron([eye(N_basis_x, format='csr'), eye(N_basis_y, format='csr'), z_op])
+                if "x2" in self.ops_to_compute:
+                    self.x2_op = iterative_kron([x2_op, eye(N_basis_y, format='csr'), eye(N_basis_z, format='csr')])
+                    self.y2_op = iterative_kron([eye(N_basis_x, format='csr'), y2_op, eye(N_basis_z, format='csr')])
+                    self.z2_op = iterative_kron([eye(N_basis_x, format='csr'), eye(N_basis_y, format='csr'), z2_op])
             else:
                 raise ValueError("Unsupported dimension: {}".format(self.dim))
-    
+
     def get_ops(self):
         """
         Returns the constructed operators in a dictionary.
-        Only returns the operators which were computed.
-        For dims==1, returns the x-operators; for dims==2, returns x- and y-operators;
-        for dims==3, returns x-, y-, and z-operators.
+        For dims==1 returns the operators (px, etc.); for dims==2 and 3 returns lists for each dimension.
         """
         ops = {}
         if self.dim == 1:
@@ -490,69 +496,51 @@ class canonic_ops:
         elif self.dim == 3:
             if hasattr(self, "px") and hasattr(self, "py") and hasattr(self, "pz"):
                 ops["p"] = [self.px, self.py, self.pz]
-            if (hasattr(self, "px2") and hasattr(self, "py2") and
-                hasattr(self, "pz2")):
+            if hasattr(self, "px2") and hasattr(self, "py2") and hasattr(self, "pz2"):
                 ops["p2"] = [self.px2, self.py2, self.pz2]
-            if (hasattr(self, "x_op") and hasattr(self, "y_op") and
-                hasattr(self, "z_op")):
+            if hasattr(self, "x_op") and hasattr(self, "y_op") and hasattr(self, "z_op"):
                 ops["x"] = [self.x_op, self.y_op, self.z_op]
-            if (hasattr(self, "x2_op") and hasattr(self, "y2_op") and
-                hasattr(self, "z2_op")):
+            if hasattr(self, "x2_op") and hasattr(self, "y2_op") and hasattr(self, "z2_op"):
                 ops["x2"] = [self.x2_op, self.y2_op, self.z2_op]
         return ops
 
-    # --- Methods for computing operators on the grid (finite difference approximations) ---
+    # --- Finite difference (discretized) operator methods ---
     def p(self, mesh, additional=None):
-        """
-        Constructs the discretized momentum operator via a 2-point central difference.
-        """
-        from scipy.sparse import diags
-        import numpy as np
-
+        """Discretized momentum operator via a 2-point central difference."""
         dx = np.abs(mesh[1] - mesh[0])
         N = len(mesh) - 2
-        offsets = np.array([-1, 1])
-        coeffs = np.array([-1, 1], dtype=complex)
+        offsets = [-1, 1]
+        coeffs = [-1, 1]
         prefactor = -1j * self.hbar / (2 * dx)
-        diagonals = [prefactor * coeff * np.ones(N - abs(offset), dtype=complex)
-                     for offset, coeff in zip(offsets, coeffs)]
-        p_mat = diags(diagonals, offsets, shape=(N, N), format='csr')
+        diags_list = [prefactor * coeff * np.ones(N - abs(offset), dtype=complex) 
+                      for offset, coeff in zip(offsets, coeffs)]
+        p_mat = diags(diags_list, offsets, shape=(N, N), format='csr')
         if additional is not None:
             pos = additional[0]
             kron_list = additional[1:].copy()
             kron_list.insert(pos, p_mat)
             return iterative_kron(kron_list)
-        else:
-            return p_mat
+        return p_mat
 
     def p2(self, mesh, additional=None):
-        """
-        Constructs the discretized squared momentum operator via a 3-point stencil.
-        """
-        from scipy.sparse import diags
-        import numpy as np
-
+        """Discretized squared momentum operator via a 3-point stencil."""
         dx = np.abs(mesh[1] - mesh[0])
         N = len(mesh) - 2
-        offsets = np.array([-1, 0, 1])
-        coeffs = np.array([1, -2, 1], dtype=float)
-        prefactor = -self.hbar**2 / (dx**2)
-        diagonals = [prefactor * coeff * np.ones(N - abs(offset), dtype=float)
-                     for offset, coeff in zip(offsets, coeffs)]
-        p2_mat = diags(diagonals, offsets, shape=(N, N), format='csr')
+        offsets = [-1, 0, 1]
+        coeffs = [1, -2, 1]
+        prefactor = - self.hbar**2 / (dx**2)
+        diags_list = [prefactor * coeff * np.ones(N - abs(offset), dtype=float)
+                      for offset, coeff in zip(offsets, coeffs)]
+        p2_mat = diags(diags_list, offsets, shape=(N, N), format='csr')
         if additional is not None:
             pos = additional[0]
             kron_list = additional[1:].copy()
             kron_list.insert(pos, p2_mat)
             return iterative_kron(kron_list)
-        else:
-            return p2_mat
+        return p2_mat
 
     def x(self, mesh, additional=None):
-        """
-        Constructs the discretized position operator (diagonal in the grid basis).
-        """
-        from scipy.sparse import diags
+        """Discretized position operator (diagonal in grid basis)."""
         x_interior = mesh[1:-1]
         X = diags(x_interior, 0, format='csr')
         if additional is not None:
@@ -560,14 +548,10 @@ class canonic_ops:
             kron_list = additional[1:].copy()
             kron_list.insert(pos, X)
             return iterative_kron(kron_list)
-        else:
-            return X
+        return X
 
     def x2(self, mesh, additional=None):
-        """
-        Constructs the discretized squared position operator.
-        """
-        from scipy.sparse import diags
+        """Discretized squared position operator."""
         x_interior = mesh[1:-1]
         X2 = diags(x_interior**2, 0, format='csr')
         if additional is not None:
@@ -575,179 +559,108 @@ class canonic_ops:
             kron_list = additional[1:].copy()
             kron_list.insert(pos, X2)
             return iterative_kron(kron_list)
-        else:
-            return X2
+        return X2
 
-    # --- Methods for direct computation of matrix elements via numerical integration ---
-    def compute_p_matrix(self, fn, mesh, N):
+    # --- Numerical integration methods for computing operator matrix elements ---
+    def _compute_operator_matrix(self, fn, mesh, N, integrand_func, op_prefactor):
+        """
+        Helper for computing operator matrices via numerical integration.
+        Processes only (m,n) pairs with m <= n and fills the lower-triangle by Hermitian symmetry.
+        The integrand_func should be a function that accepts (m, n, x) and returns the integrand value.
+        op_prefactor is a multiplicative constant applied to each computed integral.
+        """
+        x_min = mesh[0]
+        x_max = mesh[-1]
+        quad_options = {
+            'limit': self.limit_divisions if self.limit_divisions else max((N + int(0.1 * N)), 50),
+            'epsabs': 1.49e-6,
+            'epsrel': 1.49e-6
+        }
+        # Build list of index pairs (m, n) with m <= n.
+        pairs = [(m, n) for m in range(N) for n in range(m, N)]
+        chunk_size = 20
+        chunks = [pairs[i:i + chunk_size] for i in range(0, len(pairs), chunk_size)]
+        results = []
+        def process_chunk(chunk):
+            partial = []
+            for (m, n) in chunk:
+                def integrand(x):
+                    return integrand_func(m, n, x)
+                val, _ = quad(integrand, x_min, x_max, **quad_options)
+                partial.append((m, n, op_prefactor * val))
+            return partial
+        with ThreadPoolExecutor() as executor:
+            for res in executor.map(process_chunk, chunks):
+                results.extend(res)
+        # Fill a dense matrix and enforce Hermitian symmetry.
+        mat = np.zeros((N, N), dtype=complex)
+        for (m, n, value) in results:
+            mat[m, n] = value
+            if m != n:
+                mat[n, m] = np.conj(value)
+        return mat
+
+    def _embed_if_needed(self, op, additional):
+        """Embed operator op via iterative_kron if additional is provided."""
+        if additional is not None:
+            pos = additional[0]
+            kron_list = additional[1:].copy()
+            kron_list.insert(pos, op)
+            return iterative_kron(kron_list)
+        return op
+
+    def compute_p_matrix(self, fn, mesh, N, additional=None):
         """
         Computes the momentum operator matrix elements:
           <m|p|n> = -i ħ ∫ ψ_m*(x) [d/dx ψ_n(x)] dx
-        Only computes integrals for m <= n, then fills in the lower-triangle via Hermitian conjugation.
-        The integrations are processed in chunks to reduce overhead.
+        Only computes for m <= n and embeds the result if needed.
         """
-        x_min = mesh[0]
-        x_max = mesh[-1]
-        quad_options = {
-            'limit': self.limit_divisions if self.limit_divisions else max((N + int(0.1 * N)),50),
-            'epsabs': 1.49e-6,
-            'epsrel': 1.49e-6
-        }
+        def integrand(m, n, x):
+            psi_m, _, _ = fn(m, x)
+            _, dpsi_n, _ = fn(n, x)
+            return np.conj(psi_m) * dpsi_n
+        mat = self._compute_operator_matrix(fn, mesh, N, integrand, op_prefactor=-1j * self.hbar)
+        return csr_matrix(self._embed_if_needed(mat, additional))
 
-        # Build list of index pairs (m, n) with m <= n.
-        pairs = [(m, n) for m in range(N) for n in range(m, N)]
-        chunk_size = 20  # Tune this parameter as needed.
-        chunks = [pairs[i:i+chunk_size] for i in range(0, len(pairs), chunk_size)]
-        
-        def process_chunk(chunk):
-            results = []
-            for (m, n) in chunk:
-                # Define the integrand for the (m, n) element.
-                def integrand(x):
-                    psi_m, _, _ = fn(m, x)
-                    _, dpsi_n, _ = fn(n, x)
-                    return np.conj(psi_m) * dpsi_n
-                val, _ = quad(integrand, x_min, x_max, **quad_options)
-                results.append((m, n, -1j * self.hbar * val))
-            return results
-
-        all_results = []
-        with ThreadPoolExecutor() as executor:
-            for chunk_results in executor.map(process_chunk, chunks):
-                all_results.extend(chunk_results)
-
-        # Fill a sparse matrix with computed values.
-        p_mat = lil_matrix((N, N), dtype=complex)
-        for (m, n, value) in all_results:
-            p_mat[m, n] = value
-            if m != n:  # Use Hermitian property: A_nm = conj(A_mn)
-                p_mat[n, m] = np.conj(value)
-        return p_mat.tocsr()
-
-    def compute_p2_matrix(self, fn, mesh, N):
+    def compute_p2_matrix(self, fn, mesh, N, additional=None):
         """
         Computes the squared momentum operator matrix elements:
-          <m|p²|n> = -ħ² ∫ ψ_m*(x) [d²/dx² ψ_n(x)] dx
-        Only computes for m <= n, and fills in the rest by Hermitian conjugation.
-        Integrals are grouped in chunks.
+          <m|p^2|n> = -ħ² ∫ ψ_m*(x) [d²/dx² ψ_n(x)] dx
+        Only computes for m <= n and embeds if requested.
         """
-        x_min = mesh[0]
-        x_max = mesh[-1]
-        quad_options = {
-            'limit': self.limit_divisions if self.limit_divisions else max((N + int(0.1 * N)),50),
-            'epsabs': 1.49e-6,
-            'epsrel': 1.49e-6
-        }
+        def integrand(m, n, x):
+            psi_m, _, _ = fn(m, x)
+            _, _, d2psi_n = fn(n, x)
+            return np.conj(psi_m) * d2psi_n
+        mat = self._compute_operator_matrix(fn, mesh, N, integrand, op_prefactor= - self.hbar**2)
+        return csr_matrix(self._embed_if_needed(mat, additional))
 
-        pairs = [(m, n) for m in range(N) for n in range(m, N)]
-        chunk_size = 20
-        chunks = [pairs[i:i+chunk_size] for i in range(0, len(pairs), chunk_size)]
-        
-        def process_chunk(chunk):
-            results = []
-            for (m, n) in chunk:
-                def integrand(x):
-                    psi_m, _, _ = fn(m, x)
-                    # Extract second derivative from fn(n, x)
-                    _, _, d2psi_n = fn(n, x)
-                    return np.conj(psi_m) * d2psi_n
-                val, _ = quad(integrand, x_min, x_max, **quad_options)
-                results.append((m, n, - (self.hbar ** 2) * val))
-            return results
-
-        all_results = []
-        with ThreadPoolExecutor() as executor:
-            for chunk_results in executor.map(process_chunk, chunks):
-                all_results.extend(chunk_results)
-
-        p2_mat = lil_matrix((N, N), dtype=complex)
-        for (m, n, value) in all_results:
-            p2_mat[m, n] = value
-            if m != n:
-                p2_mat[n, m] = np.conj(value)
-        return p2_mat.tocsr()
-
-    def compute_x_matrix(self, fn, mesh, N):
+    def compute_x_matrix(self, fn, mesh, N, additional=None):
         """
         Computes the position operator matrix elements:
           <m|x|n> = ∫ ψ_m*(x) x ψ_n(x) dx
-        Uses chunked integration for m <= n and fills lower-triangle via Hermitian symmetry.
+        Only computes for m <= n and embeds if requested.
         """
-        x_min = mesh[0]
-        x_max = mesh[-1]
-        quad_options = {
-            'limit': self.limit_divisions if self.limit_divisions else max((N + int(0.1 * N)),50),
-            'epsabs': 1.49e-6,
-            'epsrel': 1.49e-6
-        }
+        def integrand(m, n, x):
+            psi_m, _, _ = fn(m, x)
+            psi_n, _, _ = fn(n, x)
+            return np.conj(psi_m) * x * psi_n
+        mat = self._compute_operator_matrix(fn, mesh, N, integrand, op_prefactor=1)
+        return csr_matrix(self._embed_if_needed(mat, additional))
 
-        pairs = [(m, n) for m in range(N) for n in range(m, N)]
-        chunk_size = 20
-        chunks = [pairs[i:i+chunk_size] for i in range(0, len(pairs), chunk_size)]
-        
-        def process_chunk(chunk):
-            results = []
-            for (m, n) in chunk:
-                def integrand(x):
-                    psi_m, _, _ = fn(m, x)
-                    psi_n, _, _ = fn(n, x)
-                    return np.conj(psi_m) * x * psi_n
-                val, _ = quad(integrand, x_min, x_max, **quad_options)
-                results.append((m, n, val))
-            return results
-
-        all_results = []
-        with ThreadPoolExecutor() as executor:
-            for chunk_results in executor.map(process_chunk, chunks):
-                all_results.extend(chunk_results)
-
-        x_mat = lil_matrix((N, N), dtype=complex)
-        for (m, n, value) in all_results:
-            x_mat[m, n] = value
-            if m != n:
-                x_mat[n, m] = np.conj(value)
-        return x_mat.tocsr()
-
-    def compute_x2_matrix(self, fn, mesh, N):
+    def compute_x2_matrix(self, fn, mesh, N, additional=None):
         """
         Computes the squared position operator matrix elements:
-          <m|x²|n> = ∫ ψ_m*(x) x² ψ_n(x) dx
-        Only computes for m <= n, and fills the lower-triangle using Hermitian symmetry.
+          <m|x^2|n> = ∫ ψ_m*(x) x^2 ψ_n(x) dx
+        Only computes for m <= n and embeds if requested.
         """
-        x_min = mesh[0]
-        x_max = mesh[-1]
-        quad_options = {
-            'limit': self.limit_divisions if self.limit_divisions else max((N + int(0.1 * N)),50),
-            'epsabs': 1.49e-6,
-            'epsrel': 1.49e-6
-        }
+        def integrand(m, n, x):
+            psi_m, _, _ = fn(m, x)
+            psi_n, _, _ = fn(n, x)
+            return np.conj(psi_m) * (x ** 2) * psi_n
+        mat = self._compute_operator_matrix(fn, mesh, N, integrand, op_prefactor=1)
+        return csr_matrix(self._embed_if_needed(mat, additional))
 
-        pairs = [(m, n) for m in range(N) for n in range(m, N)]
-        chunk_size = 20
-        chunks = [pairs[i:i+chunk_size] for i in range(0, len(pairs), chunk_size)]
-        
-        def process_chunk(chunk):
-            results = []
-            for (m, n) in chunk:
-                def integrand(x):
-                    psi_m, _, _ = fn(m, x)
-                    psi_n, _, _ = fn(n, x)
-                    return np.conj(psi_m) * (x ** 2) * psi_n
-                val, _ = quad(integrand, x_min, x_max, **quad_options)
-                results.append((m, n, val))
-            return results
-
-        all_results = []
-        with ThreadPoolExecutor() as executor:
-            for chunk_results in executor.map(process_chunk, chunks):
-                all_results.extend(chunk_results)
-
-        x2_mat = lil_matrix((N, N), dtype=complex)
-        for (m, n, value) in all_results:
-            x2_mat[m, n] = value
-            if m != n:
-                x2_mat[n, m] = np.conj(value)
-        return x2_mat.tocsr()
 
 
 
