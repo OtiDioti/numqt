@@ -533,64 +533,117 @@ class canonic_ops:
     # --- Integration-based operators (when a basis is provided) ---
     def _compute_operator_matrix(self, fn, mesh, N, integrand_func, scale, additional=None):
         """
-        General function to compute an operator matrix element via numerical integration.
+        Optimized function to compute an operator matrix element via numerical integration.
         Only computes (m,n) for m<=n and then fills in the Hermitian lower-triangle.
-        - fn: basis function generator that returns (psi, dpsi, d2psi)
-        - mesh: 1D grid array
-        - N: dimension of the basis
-        - integrand_func: function taking (psi_m, psi_n, [dpsi_n/d2psi_n]) that defines the integrand.
-        - scale: multiplicative prefactor (e.g. -1j*self.hbar for p, etc.)
+        
+        Parameters
+        ----------
+        fn : callable
+            Basis function generator that returns (psi, dpsi, d2psi)
+        mesh : ndarray
+            1D grid array
+        N : int
+            Dimension of the basis
+        integrand_func : callable
+            Function taking (psi_m, psi_n, dpsi_n, d2psi_n, x) that defines the integrand
+        scale : float or complex
+            Multiplicative prefactor (e.g. -1j*self.hbar for p)
+        additional : list, optional
+            Information for embedding the operator in a larger space
         """
         x_min = mesh[0]
         x_max = mesh[-1]
-        quad_options = {
-            'limit': self.limit_divisions if self.limit_divisions else max((N + int(0.1 * N)), 50),
-            'epsabs': 1.49e-6,
-            'epsrel': 1.49e-6
-        }
-        # Compute only for m <= n.
-        pairs = [(m, n) for m in range(N) for n in range(m, N)]
-        chunk_size = 20
-        chunks = [pairs[i:i+chunk_size] for i in range(0, len(pairs), chunk_size)]
-        results = []
-        def process_chunk(chunk):
-            local_results = []
-            for (m, n) in chunk:
-                def integrand(x):
-                    psi_m, dpsi_m, d2psi_m = fn(m, x)
-                    psi_n, dpsi_n, d2psi_n = fn(n, x)
-                    return integrand_func(psi_m, psi_n, dpsi_n, d2psi_n, x)
-                val, _ = quad(integrand, x_min, x_max, **quad_options)
-                local_results.append((m, n, scale * val))
-            return local_results
-
-        with ThreadPoolExecutor() as executor:
-            for chunk_results in executor.map(process_chunk, chunks):
-                results.extend(chunk_results)
-        mat = lil_matrix((N, N), dtype=complex)
-        for m, n, value in results:
-            mat[m, n] = value
-            if m != n:
-                mat[n, m] = np.conj(value)
-        return self.embed_operator(mat.tocsr(), additional)
+        
+        # Use Gaussian quadrature for faster integration
+        # Number of points can be adjusted based on required accuracy
+        from scipy.integrate import fixed_quad
+        n_points = max(int(3 * N), 50)  # Adaptive number of points
+        
+        # Pre-compute basis functions at quadrature points
+        from scipy.special import roots_legendre
+        x_quad, weights = roots_legendre(n_points)
+        
+        # Transform from [-1, 1] to [x_min, x_max]
+        x_quad = 0.5 * (x_max - x_min) * x_quad + 0.5 * (x_max + x_min)
+        weights = 0.5 * (x_max - x_min) * weights
+        
+        # Pre-compute all basis functions and derivatives at quadrature points
+        basis_values = np.zeros((N, n_points, 3), dtype=complex)  # [basis_idx, quad_point, (psi, dpsi, d2psi)]
+        
+        # Batch computation of basis functions
+        for i in range(N):
+            for j, x in enumerate(x_quad):
+                psi, dpsi, d2psi = fn(i, x)
+                basis_values[i, j, 0] = psi
+                basis_values[i, j, 1] = dpsi
+                basis_values[i, j, 2] = d2psi
+        
+        # Initialize sparse matrix in COO format for efficiency
+        from scipy.sparse import coo_matrix
+        rows = []
+        cols = []
+        data = []
+        
+        # Compute only upper triangle (m <= n)
+        for m in range(N):
+            for n in range(m, N):
+                # Vectorized integration using pre-computed values
+                integrand_vals = np.array([
+                    integrand_func(
+                        basis_values[m, i, 0],  # psi_m
+                        basis_values[n, i, 0],  # psi_n
+                        basis_values[n, i, 1],  # dpsi_n
+                        basis_values[n, i, 2],  # d2psi_n
+                        x_quad[i]               # x
+                    ) for i in range(n_points)
+                ])
+                
+                # Compute integral using quadrature
+                integral = np.sum(integrand_vals * weights)
+                scaled_val = scale * integral
+                
+                # Add to sparse matrix data
+                rows.append(m)
+                cols.append(n)
+                data.append(scaled_val)
+                
+                # Fill in lower triangle for Hermitian operators
+                if m != n:
+                    rows.append(n)
+                    cols.append(m)
+                    data.append(np.conj(scaled_val))
+        
+        # Create sparse matrix
+        mat = coo_matrix((data, (rows, cols)), shape=(N, N)).tocsr()
+        
+        # Embed if needed
+        return self.embed_operator(mat, additional)
     
     def compute_p_matrix(self, fn, mesh, N, additional=None):
-        # <m|p|n> = -i ħ ∫ psi_m*(x) d/dx psi_n(x) dx
+        """
+        Compute momentum operator matrix elements: <m|p|n> = -i ħ ∫ psi_m*(x) d/dx psi_n(x) dx
+        """
         integrand = lambda psi_m, psi_n, dpsi_n, d2psi_n, x: np.conj(psi_m) * dpsi_n
         return self._compute_operator_matrix(fn, mesh, N, integrand, -1j * self.hbar, additional)
     
     def compute_p2_matrix(self, fn, mesh, N, additional=None):
-        # <m|p^2|n> = -ħ² ∫ psi_m*(x) d²/dx² psi_n(x) dx
+        """
+        Compute squared momentum operator matrix elements: <m|p^2|n> = -ħ² ∫ psi_m*(x) d²/dx² psi_n(x) dx
+        """
         integrand = lambda psi_m, psi_n, dpsi_n, d2psi_n, x: np.conj(psi_m) * d2psi_n
         return self._compute_operator_matrix(fn, mesh, N, integrand, -self.hbar**2, additional)
     
     def compute_x_matrix(self, fn, mesh, N, additional=None):
-        # <m|x|n> = ∫ psi_m*(x) x psi_n(x) dx
+        """
+        Compute position operator matrix elements: <m|x|n> = ∫ psi_m*(x) x psi_n(x) dx
+        """
         integrand = lambda psi_m, psi_n, dpsi_n, d2psi_n, x: np.conj(psi_m) * x * psi_n
         return self._compute_operator_matrix(fn, mesh, N, integrand, 1.0, additional)
     
     def compute_x2_matrix(self, fn, mesh, N, additional=None):
-        # <m|x^2|n> = ∫ psi_m*(x) x^2 psi_n(x) dx
+        """
+        Compute squared position operator matrix elements: <m|x^2|n> = ∫ psi_m*(x) x^2 psi_n(x) dx
+        """
         integrand = lambda psi_m, psi_n, dpsi_n, d2psi_n, x: np.conj(psi_m) * (x**2) * psi_n
         return self._compute_operator_matrix(fn, mesh, N, integrand, 1.0, additional)
 
