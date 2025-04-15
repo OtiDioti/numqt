@@ -760,7 +760,7 @@ class Hamiltonian:
             The reconstructed and normalized physical-space wavefunctions.
         """
         energies, eigvecs = eigsh(self.H, k=k, which="SM")
-            if self.verbose:
+        if self.verbose:
                 print("Solved eigenvalue problem.")
 
         # Sort eigenpairs.
