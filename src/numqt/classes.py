@@ -666,7 +666,7 @@ from scipy.sparse.linalg import eigsh
 from scipy.sparse import csr_matrix, lil_matrix
 
 class Hamiltonian:
-    def __init__(self, H, mesh, basis=None, other_subspaces_dims=None):
+    def __init__(self, H, mesh, basis=None, other_subspaces_dims=None, verbose=False):
         """
         Parameters
         ----------
@@ -693,6 +693,7 @@ class Hamiltonian:
         self.energies = None
         self.wavefunctions = None
         self.densities = None
+        self.verbose = verbose
 
         if self.other_subspaces_dims:
             if any(not isinstance(dim, int) for dim in self.other_subspaces_dims):
@@ -759,7 +760,8 @@ class Hamiltonian:
             The reconstructed and normalized physical-space wavefunctions.
         """
         energies, eigvecs = eigsh(self.H, k=k, which="SM")
-        print("Solved eigenvalue problem.")
+            if self.verbose:
+                print("Solved eigenvalue problem.")
 
         # Sort eigenpairs.
         order = np.argsort(energies)
