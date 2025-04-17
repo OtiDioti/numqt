@@ -84,7 +84,7 @@ def spin12(dimx: int = None, dimy: int = None, dimz: int = None, hbar=1):
         Dimensions of extra Hilbert spaces. For each that is not None, an identity operator 
         of that size is included in the tensor product.
     hbar : float, optional
-        Planck's constant (default 1).
+        Planck's constant (default 1). Set it to 2 if you want the operators without their rescaling.
     
     Returns
     -------

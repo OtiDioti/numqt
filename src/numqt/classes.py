@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import sparse
-from scipy.sparse import diags, eye, kron
+from scipy.sparse import diags, eye, kron, coo_matrix, isspmatrix_csr, isspmatrix_csc
 from .utils import iterative_kron
 from skimage import measure
 import plotly.graph_objects as go
@@ -226,7 +226,7 @@ class Mesh:
 # ----------------------------------------------------------
 
 class canonic_ops:
-    def __init__(self, mesh, ops_to_compute, basis=None, additional_subspaces=None, limit_divisions=None, hbar=1):
+    def __init__(self, mesh, ops_to_compute, basis=None, additional_subspaces=None, limit_divisions=None, hbar=1, threshold=1e-15):
         """
         Constructs the discretized quantum mechanical operators for position and momentum.
         
@@ -243,13 +243,17 @@ class canonic_ops:
         limit_divisions : int, optional
             Parameter for the integration routine.
         hbar : float, optional
-            Planck’s constant.
+            Planck's constant.
+        threshold : float, optional
+            Elements with absolute value below this threshold are set to zero when using integration.
+            This improves sparsity and numerical stability. Default is 1e-15.
         """
         self.hbar = hbar
         self.ops_to_compute = ops_to_compute
         self.limit_divisions = limit_divisions
         self.basis = basis
         self.additional_subspaces = additional_subspaces
+        self.threshold = threshold
         self.dim = mesh.dims
 
         # Get the mesh grids (only the interior points are used)
@@ -348,14 +352,13 @@ class canonic_ops:
             if self.dim == 1:
                 basis_x = get_basis("x")
                 fn_x, N_basis_x = basis_x
+                
                 # If additional_subspaces is provided, build additional_x.
                 if self.additional_subspaces is None:
                     additional_x = None
                 else:
                     additional_x = [len(self.additional_subspaces)] + self.additional_subspaces
-                    # Identity: use basis dimension.
-                    I = eye(N_basis_x, format='csr')
-                    additional_x.append(I)
+
                 if "p" in self.ops_to_compute:
                     self.px = self.compute_p_matrix(fn_x, self.mesh_x, N_basis_x, additional=additional_x)
                 if "p2" in self.ops_to_compute:
@@ -490,6 +493,7 @@ class canonic_ops:
             [pos, sub1, sub2, ...]
         where pos indicates the insertion index.
         """
+        
         if additional is None:
             return op
         pos = additional[0]
@@ -535,6 +539,7 @@ class canonic_ops:
         """
         Optimized function to compute an operator matrix element via numerical integration.
         Only computes (m,n) for m<=n and then fills in the Hermitian lower-triangle.
+        Elements with absolute value below self.threshold are set to zero to improve sparsity.
         
         Parameters
         ----------
@@ -558,6 +563,7 @@ class canonic_ops:
         # Number of points can be adjusted based on required accuracy
         from scipy.integrate import fixed_quad
         n_points = max(int(3 * N), 50)  # Adaptive number of points
+        
         
         # Pre-compute basis functions at quadrature points
         from scipy.special import roots_legendre
@@ -602,16 +608,18 @@ class canonic_ops:
                 integral = np.sum(integrand_vals * weights)
                 scaled_val = scale * integral
                 
-                # Add to sparse matrix data
-                rows.append(m)
-                cols.append(n)
-                data.append(scaled_val)
-                
-                # Fill in lower triangle for Hermitian operators
-                if m != n:
-                    rows.append(n)
-                    cols.append(m)
-                    data.append(np.conj(scaled_val))
+                # Apply threshold to improve sparsity - NEW CODE
+                if np.abs(scaled_val) >= self.threshold:
+                    # Add to sparse matrix data
+                    rows.append(m)
+                    cols.append(n)
+                    data.append(scaled_val)
+                    
+                    # Fill in lower triangle for Hermitian operators
+                    if m != n and np.abs(np.conj(scaled_val)) >= self.threshold:
+                        rows.append(n)
+                        cols.append(m)
+                        data.append(np.conj(scaled_val))
         
         # Create sparse matrix
         mat = coo_matrix((data, (rows, cols)), shape=(N, N)).tocsr()
@@ -666,7 +674,7 @@ from scipy.sparse.linalg import eigsh
 from scipy.sparse import csr_matrix, lil_matrix
 
 class Hamiltonian:
-    def __init__(self, H, mesh, basis=None, other_subspaces_dims=None, verbose=False):
+    def __init__(self, H, mesh, basis=None, other_subspaces_dims=None, verbose=False, threshold=1e-10):
         """
         Parameters
         ----------
@@ -685,8 +693,13 @@ class Hamiltonian:
             If provided, the eigenvectors from solve() are expansion coefficients in that basis.
         other_subspaces_dims : list[int], optional
             Extra tensor–product dimensions (these will be summed over later).
+        threshold : float, optional
+            Elements with absolute value below this threshold are set to zero.
+            This improves sparsity and numerical stability. Default is 1e-10.
         """
+        self.threshold = threshold
         self.H = H
+        self.H = self._threshold_sparse_matrix(self.H)
         self.mesh = mesh
         self.basis = basis
         self.other_subspaces_dims = other_subspaces_dims
@@ -701,6 +714,78 @@ class Hamiltonian:
         
         # Flag to note whether basis matrices have been cached.
         self._cached_basis = False
+        
+    def _threshold_sparse_matrix(self, matrix):
+        """
+        Sets to zero all elements of a scipy sparse matrix whose absolute value
+        is below the specified threshold. Optimized for performance.
+            
+        Parameters:
+        -----------
+        matrix : scipy.sparse.spmatrix
+            The input sparse matrix to threshold
+            
+        Returns:
+        --------
+        scipy.sparse.spmatrix
+            A sparse matrix with small elements removed
+        """
+        # For CSR and CSC formats, we can operate directly on the data
+        if isspmatrix_csr(matrix) or isspmatrix_csc(matrix):
+            # Make a copy to avoid modifying the original
+            result = matrix.copy()
+            
+            # Create a mask for values to keep
+            mask = np.abs(result.data) >= self.threshold
+            
+            # Apply the mask to the data and indices
+            result.data = result.data[mask]
+            result.indices = result.indices[mask]
+            
+            # Reconstruct the indptr array
+            if isspmatrix_csr(matrix):
+                # Process each row
+                new_indptr = np.zeros_like(result.indptr)
+                for i in range(matrix.shape[0]):
+                    # Count elements in this row that pass the threshold
+                    row_start, row_end = matrix.indptr[i], matrix.indptr[i+1]
+                    row_mask = mask[row_start:row_end]
+                    new_indptr[i+1] = new_indptr[i] + np.count_nonzero(row_mask)
+                result.indptr = new_indptr
+            else:  # CSC format
+                # Process each column
+                new_indptr = np.zeros_like(result.indptr)
+                for i in range(matrix.shape[1]):
+                    # Count elements in this column that pass the threshold
+                    col_start, col_end = matrix.indptr[i], matrix.indptr[i+1]
+                    col_mask = mask[col_start:col_end]
+                    new_indptr[i+1] = new_indptr[i] + np.count_nonzero(col_mask)
+                result.indptr = new_indptr
+                
+            return result
+        else:
+            # For other formats, convert to CSR first, then apply threshold
+            # IMPORTANT: Don't call this function recursively!
+            csr_matrix = matrix.tocsr()
+            
+            # Now apply the threshold directly to the CSR matrix
+            result_csr = csr_matrix.copy()
+            mask = np.abs(result_csr.data) >= self.threshold
+            
+            # Apply the mask to the data and indices
+            result_csr.data = result_csr.data[mask]
+            result_csr.indices = result_csr.indices[mask]
+            
+            # Reconstruct the indptr array
+            new_indptr = np.zeros_like(result_csr.indptr)
+            for i in range(csr_matrix.shape[0]):
+                row_start, row_end = csr_matrix.indptr[i], csr_matrix.indptr[i+1]
+                row_mask = mask[row_start:row_end]
+                new_indptr[i+1] = new_indptr[i] + np.count_nonzero(row_mask)
+            result_csr.indptr = new_indptr
+            
+            # Convert back to the original format
+            return result_csr.asformat(matrix.format)
 
     def _cache_basis(self):
         """
