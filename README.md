@@ -1,173 +1,152 @@
-# Numerical Quantum Theory (numqt)
+# NumQT - Numerical Quantum Toolkit
 
-numqt is a Python package for performing finite element simulations of quantum systems. This is achieved via the construction of adaptive, non-uniform meshes and generating quantum mechanical operators on these grids. It also includes routines for creating spin operators (spin‑1/2 and spin‑3/2) that can be embedded in higher-dimensional Hilbert spaces via tensor products. This tool is ideal for researchers and developers working on numerical quantum mechanics, computational physics, and related fields.
-
-## Table of Contents
-
-- [Features](#features)
-- [Installation](#installation)
-- [Usage](#usage)
-  - [Adaptive Mesh Generation](#adaptive-mesh-generation)
-  - [Canonical Operators](#canonical-operators)
-  - [Spin Operators](#spin-operators)
-  - [Visualization](#visualization)
-- [Examples](#examples)
-- [Contributing](#contributing)
-- [License](#license)
-- [Acknowledgments](#acknowledgments)
-- [Contact](#contact)
+NumQT is a Python package designed for numerical simulations in quantum mechanics. It provides a comprehensive set of tools for solving quantum mechanical problems using finite difference methods as well as spectral techniques.
 
 ## Features
 
-- **Adaptive Mesh Generation**:  
-  Create non-uniform 1D, 2D, or 3D grids with smooth transitions in resolution using user-defined spacing functions. No more sharp boundaries between high- and low-resolution regions.
-
-- **Canonical Operators**:  
-  Construct quantum mechanical operators (e.g., momentum \( p \), kinetic energy \( p^2 \), position \( x \), and potential \( x^2 \)).
-
-- **Spin Operators**:  
-  Build spin‑3/2 and spin‑1/2 operators (with their squared counterparts) and embed them into tensor product spaces if extra degrees of freedom (e.g., spatial dimensions) are provided.
-
-- **Flexible Tensor Embedding**:  
-  Operators are automatically “embedded” into the full Hilbert space only for the extra dimensions specified by the user.
-
-- **Modular & Extensible**:  
-  Designed for integration with quantum simulation workflows. Easily extendable and customizable to fit your research needs.
+- **Flexible mesh generation** with support for 1D, 2D, and 3D systems
+- **Canonical operators** (position, momentum, and derivatives) in multiple dimensions
+- **Efficient Hamiltonian construction** 
+- **Eigenvalue solvers** for finding energy states and wave functions
+- **Rich visualization tools** for plotting wave functions and probability densities
+- **Support for different basis functions** and spectral methods
 
 ## Installation
 
-### Requirements
-
-- Python 3.6+
-- [NumPy](https://numpy.org/)
-- [SciPy](https://www.scipy.org/)
-- (Optional) [Matplotlib](https://matplotlib.org/) for 1D/2D visualization
-- (Optional) [Plotly](https://plotly.com/python/) and [scikit-image](https://scikit-image.org/) for 3D visualization
-
-### Installing from Source
-
-Clone the repository and install dependencies:
+You can install NumQT  manually:
 
 ```bash
 git clone https://github.com/OtiDioti/numqt.git
 cd numqt
-pip install -r requirements.txt
-```
-
-For development, you can install in editable mode:
-
-```bash
 pip install -e .
 ```
 
-## Usage
+## Dependencies
 
-### Adaptive Mesh Generation
+NumQT requires the following Python packages:
 
-The package includes a `Mesh` class that lets you generate adaptive grids. For example, to create a 1D adaptive mesh with smooth spacing:
+- NumPy
+- SciPy
+- Matplotlib
+- Plotly (for 3D visualizations)
+
+## Quick Start
+
+Here's a minimal example to solve the quantum harmonic oscillator problem:
 
 ```python
-from mesh import Mesh
+from numqt import *
 
-# Define a spacing function for x:
-dx_func = lambda x: 0.05 if 0.4 <= x <= 0.6 else 0.2
+# Define mesh parameters
+Lx = 1  # Characteristic length
+xbounds = (-15*Lx, 15*Lx)  # Domain boundaries
+dx = 0.1  # Grid spacing
+nx = int(np.abs(xbounds[1] - xbounds[0]) / dx)
 
-# Create a 1D mesh over [0, 1]
-mesh = Mesh(
-    dims=1,
-    xbounds=(0, 1),
-    initial_points=10,
-    dx_max=0.2,
-    dx_func=dx_func,
-    max_iter=20
-)
+# Create mesh
+mesh_obj = Mesh(dims=1, xbounds=xbounds, nx=nx)
+
+# Physical parameters
+hbar = 1
+m = 1  # Mass
+wx = hbar / (m * Lx**2)  # Frequency
+
+# Get canonical operators
+operators = canonic_ops(mesh_obj, ops_to_compute=["p2", "x2"], additional_subspaces=None, hbar=1)
+px2 = operators.get_ops()["p2"]
+x2 = operators.get_ops()["x2"]
+
+# Create Hamiltonian
+H = Hamiltonian(px2 / (2*m) + 0.5 * m * x2 * wx**2, mesh_obj)
+
+# Solve for eigenvalues and eigenfunctions
+k = 10  # Number of states to compute
+energies, wavefunctions = H.solve(k)
+
+# Plot ground state wavefunction
+H.plot(0)
 ```
 
-For 2D/3D meshes, provide the additional bounds and spacing functions (dy_func, dz_func) as needed.
+## Core Classes
+
+### Mesh
+
+The `Mesh` class is the foundation of NumQT, providing a discretized representation of space for quantum mechanical calculations.
+
+```python
+mesh = Mesh(dims=1, xbounds=(-10, 10), nx=200)
+```
+
+Parameters:
+- `dims`: Dimensionality of the problem (1, 2, or 3)
+- `xbounds`, `ybounds`, `zbounds`: Domain boundaries in each dimension
+- `nx`, `ny`, `nz`: Number of grid points in each dimension
+
+Methods:
+- `generate_mesh()`: Creates the mesh grid
+- `get_grids()`: Returns mesh coordinates
+- `get_spacings()`: Returns grid spacing
+- `visualize_grid()`: Displays the mesh grid
+- `visualize_slice()`: Shows a slice of the grid
 
 ### Canonical Operators
 
-The `canonic_ops` class builds discretized quantum operators on the adaptive mesh with selectable order of accuracy. For instance, to construct operators with third‑order accuracy:
+The `canonic_ops` class constructs quantum mechanical operators like position, momentum, and their derivatives.
 
 ```python
-from canonic_ops import canonic_ops
-
-# Create canonical operators with third-order accuracy:
-ops = canonic_ops(hbar=1, order=3)
-p_operator = ops.p(mesh.mesh_x)     # momentum operator in x
-p2_operator = ops.p2(mesh.mesh_x)    # kinetic energy operator in x
-x_operator = ops.x(mesh.mesh_x)       # position operator in x
-x2_operator = ops.x2(mesh.mesh_x)     # x^2 operator
+operators = canonic_ops(mesh_obj, ops_to_compute=["p", "p2", "x", "x2"], hbar=1)
 ```
 
-If working in 2D or 3D, you can similarly build operators for each coordinate.
+Parameters:
+- `mesh`: A Mesh object
+- `ops_to_compute`: List of operators to construct ("p", "p2", "x", "x2")
+- `basis`: Optional basis functions for spectral methods
+- `additional_subspaces`: For tensor product spaces
+- `hbar`: Planck's constant
 
-### Spin Operators
+Methods:
+- `get_ops()`: Returns constructed operators as a dictionary
 
-The package includes functions for generating spin operators. For a spin‑3/2 system:
+### Hamiltonian
+
+The `Hamiltonian` class represents quantum mechanical Hamiltonians and solves the time-independent Schrödinger equation.
 
 ```python
-from spin_ops import spin32
-
-# Generate spin-3/2 operators and embed them in an extra spatial Hilbert space of dimension 50:
-J0, Jx, Jy, Jz, Jx2, Jy2, Jz2 = spin32(dimx=50, hbar=1)
+H = Hamiltonian(px2 / (2*m) + 0.5 * m * x2 * wx**2, mesh_obj)
 ```
 
-For a spin‑1/2 system:
+Parameters:
+- `H`: Hamiltonian operator (sparse matrix)
+- `mesh`: Mesh object
+- `basis`: Optional basis for spectral methods
+- `other_subspaces_dims`: Dimensions of additional subspaces
 
-```python
-from spin_ops import spin12
-
-# Generate spin-1/2 operators (Pauli matrices) without extra embedding:
-S0, Sx, Sy, Sz, Sx2, Sy2, Sz2 = spin12(hbar=1)
-```
-
-If extra dimensions (dimx, dimy, or dimz) are provided, the functions automatically embed the operators via the Kronecker product.
-
-### Visualization
-
-The package supports visualization of both the adaptive mesh and the computed operators:
-
-- **1D/2D Visualization**:  
-  Use Matplotlib to plot grid points or operator eigenfunctions.
-  
-  ```python
-  mesh.visualize_grid()  # Visualizes the 1D or 2D grid.
-  ```
-
-- **3D Visualization**:  
-  Use Plotly along with scikit-image’s marching cubes algorithm to display 3D isosurfaces.
-
-  ```python
-  from hamiltonian import Hamiltonian
-  
-  # Construct your Hamiltonian sparse matrix H...
-  ham = Hamiltonian(H, mesh)
-  energies, wavefunctions = ham.solve(k=5)
-  ham.plot(wf_index=0)
-  ```
-
-## Examples
-
-Visit the `examples/` directory for detailed usage examples:
-- Adaptive mesh generation in 1D, 2D, and 3D.
-- Construction and diagonalization of Hamiltonians.
-- Embedding and visualizing spin operators.
+Methods:
+- `solve(k)`: Finds k lowest energy eigenstates
+- `plot(wf_index)`: Visualizes an eigenfunction
+- `visualize_slice()`: Displays a slice of 2D/3D wavefunctions
 
 ## Contributing
 
-Contributions are welcome! To contribute:
-- Fork the repository.
-- Create a feature branch.
-- Write tests and update documentation.
-- Submit a pull request.
-
-Please adhere to the existing code style and include sufficient documentation.
+Contributions to NumQT are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Citation
+
+If you use NumQT in your research, please cite:
+
+```
+@software{numqt,
+  author = {NumQT Developers},
+  title = {NumQT: Numerical Quantum Toolkit},
+  url = {https://github.com/username/numqt},
+  year = {2023},
+}
+```
 
 ## Acknowledgments
 
-- The open-source community for providing robust libraries such as NumPy, SciPy, Matplotlib, Plotly, and scikit-image.
+NumQT was inspired by various numerical techniques in quantum mechanics and benefits from the robust numerical capabilities provided by NumPy and SciPy.
