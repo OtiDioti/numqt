@@ -674,13 +674,13 @@ from scipy.sparse.linalg import eigsh
 from scipy.sparse import csr_matrix, lil_matrix
 
 class Hamiltonian:
-    def __init__(self, H, mesh, basis=None, other_subspaces_dims=None, verbose=False, threshold=1e-10):
+    def __init__(self, H, mesh=None, basis=None, other_subspaces_dims=None, verbose=False, threshold=1e-10):
         """
         Parameters
         ----------
         H : sparse matrix
             The Hamiltonian operator defined on the interior points.
-        mesh : object
+        mesh : object, optional
             A mesh object that contains grid information. It should have:
                 - dims: (1, 2, or 3)
                 - full 1D grid arrays (mesh.mesh_x, mesh.mesh_y, etc.)
@@ -714,6 +714,8 @@ class Hamiltonian:
         
         # Flag to note whether basis matrices have been cached.
         self._cached_basis = False
+        if self.basis and (not self.mesh): # if basis is given but mesh is not
+            raise ValueError("A Mesh Object must be provided when using basis")
         
     def _threshold_sparse_matrix(self, matrix):
         """
@@ -853,124 +855,125 @@ class Hamiltonian:
         energies = energies[order]
         eigvecs = eigvecs[:, order]
 
-        # Determine raw reshaping shape.
-        dims = self.mesh.dims
-        if dims == 1:
-            if self.basis is None:
-                dim_primary = self.mesh.Nx - 2
-            else:
-                b = self.basis if not isinstance(self.basis, dict) else self.basis["x"]
-                _, dim_primary = b
-            raw_shape = (dim_primary,) if not self.other_subspaces_dims else tuple(self.other_subspaces_dims) + (dim_primary,)
-        elif dims == 2:
-            if self.basis is None:
-                dim_x = self.mesh.Nx - 2
-                dim_y = self.mesh.Ny - 2
-            else:
-                if isinstance(self.basis, dict):
-                    b_x = self.basis["x"]
-                    b_y = self.basis["y"]
-                else:
-                    b_x = b_y = self.basis
-                _, dim_x = b_x
-                _, dim_y = b_y
-            raw_shape = (dim_x, dim_y) if not self.other_subspaces_dims else tuple(self.other_subspaces_dims) + (dim_x, dim_y)
-        elif dims == 3:
-            if self.basis is None:
-                dim_x = self.mesh.Nx - 2
-                dim_y = self.mesh.Ny - 2
-                dim_z = self.mesh.Nz - 2
-            else:
-                if isinstance(self.basis, dict):
-                    b_x = self.basis["x"]
-                    b_y = self.basis["y"]
-                    b_z = self.basis["z"]
-                else:
-                    b_x = b_y = b_z = self.basis
-                _, dim_x = b_x
-                _, dim_y = b_y
-                _, dim_z = b_z
-            raw_shape = (dim_x, dim_y, dim_z) if not self.other_subspaces_dims else tuple(self.other_subspaces_dims) + (dim_x, dim_y, dim_z)
-        else:
-            raise ValueError("Mesh dimensionality must be 1, 2, or 3.")
-
-        # Reshape the eigenvector coefficients into their raw form.
-        raw_wavefunctions = [vec.reshape(raw_shape) for vec in eigvecs.T]
-
-        # If extra subspaces exist, sum over them.
-        if self.other_subspaces_dims:
-            for _ in range(len(self.other_subspaces_dims)):
-                raw_wavefunctions = [np.sum(vec, axis=0) for vec in raw_wavefunctions]
-
-        # If a basis is provided, cache the basis matrices once.
-        if self.basis is not None and not self._cached_basis:
-            self._cache_basis()
-
-        # Batch process eigenfunctions.
-        if self.basis is None:
-            # Already in physical space.
-            reconstructed = np.array(raw_wavefunctions)
-        else:
+        if self.mesh: # if a mesh is provided
+            # Determine raw reshaping shape.
+            dims = self.mesh.dims
             if dims == 1:
-                # In the 1D case:
-                # raw_wavefunctions have shape (k, N_basis) and self._basis_x has shape (N_basis, M),
-                # where M = len(mesh.mesh_x[1:-1]). We perform a single matrix multiplication.
-                raw_batch = np.stack(raw_wavefunctions, axis=0)  # shape: (k, N_basis)
-                # NOTE: Remove .T so the inner dimensions align.
-                reconstructed = np.dot(raw_batch, self._basis_x)   # yields (k, M)
+                if self.basis is None:
+                    dim_primary = self.mesh.Nx - 2
+                else:
+                    b = self.basis if not isinstance(self.basis, dict) else self.basis["x"]
+                    _, dim_primary = b
+                raw_shape = (dim_primary,) if not self.other_subspaces_dims else tuple(self.other_subspaces_dims) + (dim_primary,)
             elif dims == 2:
-                # For 2D case:
-                # raw_wavefunctions: (k, N_basis_x, N_basis_y)
-                raw_batch = np.stack(raw_wavefunctions, axis=0)  # shape: (k, N_basis_x, N_basis_y)
-                # First, contract along y direction.
-                # self._basis_y has shape (N_basis_y, len(mesh.mesh_y[1:-1]))
-                temp = np.matmul(raw_batch, self._basis_y)  # shape: (k, N_basis_x, len(mesh.mesh_y[1:-1]))
-                # Next, contract along x direction:
-                # self._basis_x has shape (N_basis_x, len(mesh.mesh_x[1:-1]))
-                reconstructed = np.einsum('ij,kjl->kil', self._basis_x.T, temp)
-                # Now, reconstructed has shape: (k, len(mesh.mesh_x[1:-1]), len(mesh.mesh_y[1:-1]))
+                if self.basis is None:
+                    dim_x = self.mesh.Nx - 2
+                    dim_y = self.mesh.Ny - 2
+                else:
+                    if isinstance(self.basis, dict):
+                        b_x = self.basis["x"]
+                        b_y = self.basis["y"]
+                    else:
+                        b_x = b_y = self.basis
+                    _, dim_x = b_x
+                    _, dim_y = b_y
+                raw_shape = (dim_x, dim_y) if not self.other_subspaces_dims else tuple(self.other_subspaces_dims) + (dim_x, dim_y)
             elif dims == 3:
-                # For 3D case:
-                # raw_wavefunctions: (k, N_basis_x, N_basis_y, N_basis_z)
-                raw_batch = np.stack(raw_wavefunctions, axis=0)  # shape: (k, n_x, n_y, n_z)
-                # First contract along z:
-                t1 = np.tensordot(raw_batch, self._basis_z, axes=([3],[0]))  # shape: (k, n_x, n_y, M_z)
-                # Then contract along y:
-                t2 = np.tensordot(t1, self._basis_y, axes=([2],[0]))         # shape: (k, n_x, M_y, M_z)
-                # Finally contract along x:
-                psi_temp = np.tensordot(t2, self._basis_x.T, axes=([1],[1]))       # shape: (k, M_y, M_z, M_x)
-                # Rearrange axes to get shape: (k, M_x, M_y, M_z)
-                reconstructed = np.moveaxis(psi_temp, -1, 1)
+                if self.basis is None:
+                    dim_x = self.mesh.Nx - 2
+                    dim_y = self.mesh.Ny - 2
+                    dim_z = self.mesh.Nz - 2
+                else:
+                    if isinstance(self.basis, dict):
+                        b_x = self.basis["x"]
+                        b_y = self.basis["y"]
+                        b_z = self.basis["z"]
+                    else:
+                        b_x = b_y = b_z = self.basis
+                    _, dim_x = b_x
+                    _, dim_y = b_y
+                    _, dim_z = b_z
+                raw_shape = (dim_x, dim_y, dim_z) if not self.other_subspaces_dims else tuple(self.other_subspaces_dims) + (dim_x, dim_y, dim_z)
             else:
-                raise ValueError("Unsupported dimension.")
-
-        # Compute densities and normalization factors using the mesh spacing.
-        if dims == 1:
-            dx = self.mesh.mesh_x[1] - self.mesh.mesh_x[0]
-            densities = [np.abs(wf)**2 for wf in reconstructed]
-            norm_factors = [np.sum(dens) * dx for dens in densities]
-        elif dims == 2:
-            dx = self.mesh.mesh_x[1] - self.mesh.mesh_x[0]
-            dy = self.mesh.mesh_y[1] - self.mesh.mesh_y[0]
-            densities = [np.abs(wf)**2 for wf in reconstructed]
-            norm_factors = [np.sum(dens) * dx * dy for dens in densities]
-        elif dims == 3:
-            dx = self.mesh.mesh_x[1] - self.mesh.mesh_x[0]
-            dy = self.mesh.mesh_y[1] - self.mesh.mesh_y[0]
-            dz = self.mesh.mesh_z[1] - self.mesh.mesh_z[0]
-            densities = [np.abs(wf)**2 for wf in reconstructed]
-            norm_factors = [np.sum(dens) * dx * dy * dz for dens in densities]
-
-        # Normalize the wavefunctions.
-        normalized_wavefunctions = [wf / np.sqrt(norm) for wf, norm in zip(reconstructed, norm_factors)]
-        normalized_densities = [np.abs(wf)**2 for wf in normalized_wavefunctions]
+                raise ValueError("Mesh dimensionality must be 1, 2, or 3.")
+    
+            # Reshape the eigenvector coefficients into their raw form.
+            raw_wavefunctions = [vec.reshape(raw_shape) for vec in eigvecs.T]
+    
+            # If extra subspaces exist, sum over them.
+            if self.other_subspaces_dims:
+                for _ in range(len(self.other_subspaces_dims)):
+                    raw_wavefunctions = [np.sum(vec, axis=0) for vec in raw_wavefunctions]
+    
+            # If a basis is provided, cache the basis matrices once.
+            if self.basis is not None and not self._cached_basis:
+                self._cache_basis()
+    
+            # Batch process eigenfunctions.
+            if self.basis is None:
+                # Already in physical space.
+                reconstructed = np.array(raw_wavefunctions)
+            else:
+                if dims == 1:
+                    # In the 1D case:
+                    # raw_wavefunctions have shape (k, N_basis) and self._basis_x has shape (N_basis, M),
+                    # where M = len(mesh.mesh_x[1:-1]). We perform a single matrix multiplication.
+                    raw_batch = np.stack(raw_wavefunctions, axis=0)  # shape: (k, N_basis)
+                    # NOTE: Remove .T so the inner dimensions align.
+                    reconstructed = np.dot(raw_batch, self._basis_x)   # yields (k, M)
+                elif dims == 2:
+                    # For 2D case:
+                    # raw_wavefunctions: (k, N_basis_x, N_basis_y)
+                    raw_batch = np.stack(raw_wavefunctions, axis=0)  # shape: (k, N_basis_x, N_basis_y)
+                    # First, contract along y direction.
+                    # self._basis_y has shape (N_basis_y, len(mesh.mesh_y[1:-1]))
+                    temp = np.matmul(raw_batch, self._basis_y)  # shape: (k, N_basis_x, len(mesh.mesh_y[1:-1]))
+                    # Next, contract along x direction:
+                    # self._basis_x has shape (N_basis_x, len(mesh.mesh_x[1:-1]))
+                    reconstructed = np.einsum('ij,kjl->kil', self._basis_x.T, temp)
+                    # Now, reconstructed has shape: (k, len(mesh.mesh_x[1:-1]), len(mesh.mesh_y[1:-1]))
+                elif dims == 3:
+                    # For 3D case:
+                    # raw_wavefunctions: (k, N_basis_x, N_basis_y, N_basis_z)
+                    raw_batch = np.stack(raw_wavefunctions, axis=0)  # shape: (k, n_x, n_y, n_z)
+                    # First contract along z:
+                    t1 = np.tensordot(raw_batch, self._basis_z, axes=([3],[0]))  # shape: (k, n_x, n_y, M_z)
+                    # Then contract along y:
+                    t2 = np.tensordot(t1, self._basis_y, axes=([2],[0]))         # shape: (k, n_x, M_y, M_z)
+                    # Finally contract along x:
+                    psi_temp = np.tensordot(t2, self._basis_x.T, axes=([1],[1]))       # shape: (k, M_y, M_z, M_x)
+                    # Rearrange axes to get shape: (k, M_x, M_y, M_z)
+                    reconstructed = np.moveaxis(psi_temp, -1, 1)
+                else:
+                    raise ValueError("Unsupported dimension.")
+    
+            # Compute densities and normalization factors using the mesh spacing.
+            if dims == 1:
+                dx = self.mesh.mesh_x[1] - self.mesh.mesh_x[0]
+                densities = [np.abs(wf)**2 for wf in reconstructed]
+                norm_factors = [np.sum(dens) * dx for dens in densities]
+            elif dims == 2:
+                dx = self.mesh.mesh_x[1] - self.mesh.mesh_x[0]
+                dy = self.mesh.mesh_y[1] - self.mesh.mesh_y[0]
+                densities = [np.abs(wf)**2 for wf in reconstructed]
+                norm_factors = [np.sum(dens) * dx * dy for dens in densities]
+            elif dims == 3:
+                dx = self.mesh.mesh_x[1] - self.mesh.mesh_x[0]
+                dy = self.mesh.mesh_y[1] - self.mesh.mesh_y[0]
+                dz = self.mesh.mesh_z[1] - self.mesh.mesh_z[0]
+                densities = [np.abs(wf)**2 for wf in reconstructed]
+                norm_factors = [np.sum(dens) * dx * dy * dz for dens in densities]
+    
+            # Normalize the wavefunctions.
+            normalized_wavefunctions = [wf / np.sqrt(norm) for wf, norm in zip(reconstructed, norm_factors)]
+            normalized_densities = [np.abs(wf)**2 for wf in normalized_wavefunctions]
 
         # Save results.
         self.energies = energies
-        self.wavefunctions = normalized_wavefunctions
-        self.densities = normalized_densities
+        self.wavefunctions = normalized_wavefunctions if self.mesh else eigvecs
+        self.densities = normalized_densities if self.mesh else None
 
-        return energies, normalized_wavefunctions
+        return self.energies, self.wavefunctions
 
 
 
@@ -998,7 +1001,11 @@ class Hamiltonian:
         """
         # Make sure the eigenfunctions have been computed.
         if self.densities is None:
-            raise RuntimeError("No eigenfunctions found. Call .solve(k) first.")
+            if not self.mesh: # if mesh is not provided
+                raise ValueError(""".plot() does not support plotting when mesh is not provided. WARNING: if you are using bosonic operator 
+                implementation, you will need to also provide a basis.""")
+            else:
+                raise RuntimeError("No densities found. Call .solve(k) first.")
             
         # Compute the probability density.
         density = self.densities[wf_index]
