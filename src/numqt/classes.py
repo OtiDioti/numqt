@@ -671,41 +671,91 @@ class canonic_ops:
 
 import numpy as np
 from scipy.sparse.linalg import eigsh
-from scipy.sparse import csr_matrix, lil_matrix
+from scipy.sparse import csr_matrix, lil_matrix, isspmatrix_csr, isspmatrix_csc
+from scipy.linalg import expm, logm
+import matplotlib.pyplot as plt
 
 class Hamiltonian:
-    def __init__(self, H, mesh=None, basis=None, other_subspaces_dims=None, verbose=False, threshold=1e-10):
+    def __init__(self, H=None, H_time_indep=None, H_time_dep=None, time_dep_args=None, 
+                 mesh=None, basis=None, other_subspaces_dims=None, verbose=False, threshold=1e-10):
         """
         Parameters
         ----------
-        H : sparse matrix
-            The Hamiltonian operator defined on the interior points.
+        H : sparse matrix, optional
+            The time-independent Hamiltonian operator (for backward compatibility).
+        H_time_indep : sparse matrix, optional
+            The time-independent part of the Hamiltonian.
+        H_time_dep : callable, optional
+            Function representing time-dependent part: H_time_dep(amplitude, frequency, t)
+        time_dep_args : dict, optional
+            Dictionary with keys:
+            - "amplitudes": scalar or array of amplitude values
+            - "frequencies": scalar or array of frequency values  
+            - "periods": scalar or array of period values (must match frequencies dimensionality)
+            Example: {"amplitudes": [0.1, 0.5, 1.0], "frequencies": [1.0, 2.0], "periods": [6.28, 3.14]}
         mesh : object, optional
-            A mesh object that contains grid information. It should have:
-                - dims: (1, 2, or 3)
-                - full 1D grid arrays (mesh.mesh_x, mesh.mesh_y, etc.)
-                - number of grid points (mesh.Nx, mesh.Ny, …)
-                - domain bounds (mesh.x0, mesh.x1, etc.)
-            It is assumed that the operators act on the interior nodes (mesh.mesh_x[1:-1], etc.).
+            A mesh object that contains grid information.
         basis : tuple or dict or None
-            Basis information. Either a single tuple (fn, N) to be used for all directions,
-            or a dict with keys "x", "y", (and "z") for higher dimensions.
-            If provided, the eigenvectors from solve() are expansion coefficients in that basis.
+            Basis information.
         other_subspaces_dims : list[int], optional
-            Extra tensor–product dimensions (these will be summed over later).
+            Extra tensor–product dimensions.
         threshold : float, optional
             Elements with absolute value below this threshold are set to zero.
-            This improves sparsity and numerical stability. Default is 1e-10.
         """
         self.threshold = threshold
-        self.H = H
-        self.H = self._threshold_sparse_matrix(self.H)
+        
+        # Handle backward compatibility
+        if H is not None and H_time_indep is None:
+            self.H = H
+            self.H_time_indep = H
+            self.H_time_dep = None
+            self.time_dep_args = None
+        else:
+            self.H = H_time_indep
+            self.H_time_indep = H_time_indep
+            self.H_time_dep = H_time_dep
+            self.time_dep_args = time_dep_args
+            
+        # Validate time-dependent setup
+        if self.H_time_dep is not None:
+            if self.time_dep_args is None:
+                raise ValueError("time_dep_args must be provided for time-dependent Hamiltonians")
+            
+            if isinstance(self.time_dep_args, (tuple, list)):
+                # Backward compatibility with old tuple format
+                if len(self.time_dep_args) < 3:
+                    raise ValueError("tuple format time_dep_args must contain at least (param1, param2, T)")
+                print("Warning: Using deprecated tuple format for time_dep_args. Consider using dictionary format.")
+            elif isinstance(self.time_dep_args, dict):
+                # New dictionary format
+                required_keys = {"amplitudes", "frequencies", "periods"}
+                if not required_keys.issubset(self.time_dep_args.keys()):
+                    raise ValueError(f"time_dep_args dict must contain keys: {required_keys}")
+                
+                # Validate frequencies and periods have matching dimensionality
+                freq_array = np.asarray(self.time_dep_args["frequencies"])
+                period_array = np.asarray(self.time_dep_args["periods"])
+                
+                if freq_array.shape != period_array.shape:
+                    raise ValueError(f"frequencies shape {freq_array.shape} must match periods shape {period_array.shape}")
+            else:
+                raise ValueError("time_dep_args must be a tuple (deprecated) or dictionary")
+            
+            if not callable(self.H_time_dep):
+                raise ValueError("H_time_dep must be a callable function")
+        
+        if self.H is not None:
+            self.H = self._threshold_sparse_matrix(self.H)
+        if self.H_time_indep is not None:
+            self.H_time_indep = self._threshold_sparse_matrix(self.H_time_indep)
+            
         self.mesh = mesh
         self.basis = basis
         self.other_subspaces_dims = other_subspaces_dims
         self.energies = None
         self.wavefunctions = None
         self.densities = None
+        self.quasi_energies = None
         self.verbose = verbose
 
         if self.other_subspaces_dims:
@@ -828,6 +878,384 @@ class Hamiltonian:
             self._basis_z = np.stack([fnz(n, self.mesh.mesh_z[1:-1])[0] for n in range(N_basis_z)], axis=0)
         self._cached_basis = True
 
+    def solve_quasi_energies(self, Nt=600, hbar=1, rescale_omega=None, brillouin_omega=None):
+        """
+        Compute quasi-energies using Floquet theory for time-dependent Hamiltonians.
+        Supports array parameters to compute quasi-energies for multiple parameter values.
+        
+        Parameters
+        ----------
+        Nt : int, optional
+            Number of time steps for time evolution (default: 600)
+        hbar : float, optional
+            Reduced Planck constant (default: 1)
+        rescale_omega : float, optional
+            If provided, rescale quasi-energies by 1/(hbar * rescale_omega)
+            If None, uses brillouin_omega or inferred omega
+        brillouin_omega : float, optional
+            Frequency to use for Brillouin zone mapping [-ħω/2, +ħω/2]
+            If None, uses the frequency from each calculation
+            
+        Returns
+        -------
+        quasi_energies : ndarray
+            Computed quasi-energies. Shape depends on input parameters:
+            - If all parameters are scalars: shape (N_states,)
+            - If amplitudes is array of length M, frequencies scalar: shape (M, N_states)
+            - If amplitudes scalar, frequencies array of length N: shape (N, N_states)  
+            - If amplitudes array (M) and frequencies array (N): shape (M, N, N_states)
+        """
+        if self.H_time_dep is None:
+            raise ValueError("Time-dependent Hamiltonian not specified. Use solve() for time-independent problems.")
+        
+        # Handle both old tuple format and new dictionary format
+        if isinstance(self.time_dep_args, dict):
+            return self._solve_quasi_energies_dict_format(Nt, hbar, rescale_omega, brillouin_omega)
+        else:
+            # Backward compatibility with old tuple format
+            return self._solve_quasi_energies_tuple_format(Nt, hbar, rescale_omega, brillouin_omega)
+    
+    def _solve_quasi_energies_dict_format(self, Nt=600, hbar=1, rescale_omega=None, brillouin_omega=None):
+        """Handle the new dictionary format for time_dep_args."""
+        
+        # Extract parameters
+        amplitudes_raw = self.time_dep_args["amplitudes"]
+        frequencies_raw = self.time_dep_args["frequencies"] 
+        periods_raw = self.time_dep_args["periods"]
+        
+        # Convert to arrays and check dimensions
+        amplitudes = np.asarray(amplitudes_raw)
+        frequencies = np.asarray(frequencies_raw)
+        periods = np.asarray(periods_raw)
+        
+        # Ensure frequencies and periods have same shape
+        if frequencies.shape != periods.shape:
+            raise ValueError(f"frequencies shape {frequencies.shape} must match periods shape {periods.shape}")
+        
+        # Determine output shape
+        amp_is_array = amplitudes.ndim > 0
+        freq_is_array = frequencies.ndim > 0
+        
+        if not amp_is_array and not freq_is_array:
+            # Both scalars - single calculation
+            return self._solve_quasi_energies_single_dict(
+                amplitudes.item(), frequencies.item(), periods.item(), 
+                Nt, hbar, rescale_omega, brillouin_omega
+            )
+        
+        # Get matrix dimensions
+        N = self.H_time_indep.shape[0]
+        
+        # Determine output shape and create parameter combinations
+        if amp_is_array and not freq_is_array:
+            # Amplitudes array, frequencies scalar
+            output_shape = (len(amplitudes), N)
+            if self.verbose:
+                print(f"Computing quasi-energies: {len(amplitudes)} amplitudes × 1 frequency")
+                print(f"Output shape: {output_shape}")
+            
+            quasi_energies_result = np.zeros(output_shape)
+            
+            freq_scalar = frequencies.item()
+            period_scalar = periods.item()
+            
+            for i, amp in enumerate(amplitudes):
+                if self.verbose and (i + 1) % max(1, len(amplitudes) // 10) == 0:
+                    print(f"Progress: {i + 1}/{len(amplitudes)} ({100*(i+1)/len(amplitudes):.1f}%)")
+                
+                qe = self._solve_quasi_energies_single_dict(
+                    amp, freq_scalar, period_scalar, Nt, hbar, rescale_omega, brillouin_omega
+                )
+                quasi_energies_result[i] = qe
+                
+        elif not amp_is_array and freq_is_array:
+            # Amplitudes scalar, frequencies array
+            output_shape = (len(frequencies), N)
+            if self.verbose:
+                print(f"Computing quasi-energies: 1 amplitude × {len(frequencies)} frequencies")
+                print(f"Output shape: {output_shape}")
+            
+            quasi_energies_result = np.zeros(output_shape)
+            
+            amp_scalar = amplitudes.item()
+            
+            for j, (freq, period) in enumerate(zip(frequencies, periods)):
+                if self.verbose and (j + 1) % max(1, len(frequencies) // 10) == 0:
+                    print(f"Progress: {j + 1}/{len(frequencies)} ({100*(j+1)/len(frequencies):.1f}%)")
+                
+                qe = self._solve_quasi_energies_single_dict(
+                    amp_scalar, freq, period, Nt, hbar, rescale_omega, brillouin_omega
+                )
+                quasi_energies_result[j] = qe
+                
+        else:
+            # Both arrays
+            output_shape = (len(amplitudes), len(frequencies), N)
+            if self.verbose:
+                print(f"Computing quasi-energies: {len(amplitudes)} amplitudes × {len(frequencies)} frequencies")
+                print(f"Output shape: {output_shape}")
+            
+            quasi_energies_result = np.zeros(output_shape)
+            
+            total_combinations = len(amplitudes) * len(frequencies)
+            combination_count = 0
+            
+            for i, amp in enumerate(amplitudes):
+                for j, (freq, period) in enumerate(zip(frequencies, periods)):
+                    combination_count += 1
+                    if self.verbose and combination_count % max(1, total_combinations // 10) == 0:
+                        print(f"Progress: {combination_count}/{total_combinations} ({100*combination_count/total_combinations:.1f}%)")
+                    
+                    qe = self._solve_quasi_energies_single_dict(
+                        amp, freq, period, Nt, hbar, rescale_omega, brillouin_omega
+                    )
+                    quasi_energies_result[i, j] = qe
+        
+        # Store results
+        self.quasi_energies = quasi_energies_result
+        
+        if self.verbose:
+            print(f"Computed quasi-energies with shape: {quasi_energies_result.shape}")
+        
+        return quasi_energies_result
+    
+    def _solve_quasi_energies_single_dict(self, amplitude, frequency, period, Nt=600, hbar=1, 
+                                         rescale_omega=None, brillouin_omega=None):
+        """Compute quasi-energies for a single set of parameters using dict format."""
+        
+        # Set up time array
+        dt = period / (Nt - 1)
+        t_array = dt * np.arange(Nt)
+        
+        # Get matrix dimensions
+        N = self.H_time_indep.shape[0]
+        
+        # Convert to dense arrays for efficient matrix operations
+        H0_dense = self.H_time_indep.toarray()
+        identity_N = np.eye(N, dtype=complex)
+        
+        # Pre-allocate temporary array
+        H_temp = np.zeros((N, N), dtype=complex)
+        
+        # Time evolution
+        U = identity_N.copy()
+        dt_over_hbar = dt / hbar
+        
+        for k in range(Nt):
+            t = t_array[k]
+            # Compute time-dependent Hamiltonian: H_time_dep(amplitude, frequency, t)
+            H_td = self.H_time_dep(amplitude, frequency, t)
+            
+            # Total Hamiltonian = H0 + H_time_dep(t)
+            if hasattr(H_td, 'toarray'):
+                H_td_dense = H_td.toarray()
+            else:
+                H_td_dense = H_td
+                
+            H_temp[:] = H0_dense + H_td_dense
+            U = expm(-1j * dt_over_hbar * H_temp) @ U
+        
+        # Compute Floquet Hamiltonian: HF = (i * hbar / period) * log[U]
+        HF = 1j * hbar / period * logm(U)
+        
+        # Diagonalize Floquet Hamiltonian
+        quasi_energies_raw, _ = np.linalg.eigh(HF)
+        quasi_energies_raw = quasi_energies_raw.real
+        
+        # Determine omega for Brillouin zone mapping
+        if brillouin_omega is not None:
+            omega = brillouin_omega
+        else:
+            omega = frequency  # Use the frequency from this calculation
+        
+        # Map to first Brillouin zone: [-ħω/2, +ħω/2]
+        brillouin_half_width = hbar * omega / 2
+        quasi_energies_BZ = ((quasi_energies_raw + brillouin_half_width) % (hbar * omega)) - brillouin_half_width
+        
+        # Apply rescaling if requested
+        if rescale_omega is not None:
+            rescale_factor = 1 / (hbar * rescale_omega)
+            quasi_energies_final = quasi_energies_BZ * rescale_factor
+        else:
+            # Use the same omega as for Brillouin zone mapping
+            rescale_factor = 1 / (hbar * omega)
+            quasi_energies_final = quasi_energies_BZ * rescale_factor
+        
+        # Sort quasi-energies
+        quasi_energies_final = np.sort(quasi_energies_final)
+        
+        return quasi_energies_final
+        
+    def _solve_quasi_energies_tuple_format(self, Nt=600, hbar=1, rescale_omega=None, brillouin_omega=None):
+        """Handle the old tuple format for backward compatibility."""
+        
+        # Extract parameters from time_dep_args
+        # Expected format: (param1, param2, ..., T) where T is the period
+        *params, T = self.time_dep_args
+        
+        # Identify which parameters are arrays and their shapes
+        param_arrays = []
+        param_shapes = []
+        param_is_array = []
+        
+        for i, param in enumerate(params):
+            param_array = np.asarray(param)
+            if param_array.ndim == 0:
+                # Scalar parameter
+                param_arrays.append(param_array.item())
+                param_shapes.append(1)
+                param_is_array.append(False)
+            else:
+                # Array parameter
+                if param_array.ndim > 1:
+                    raise ValueError(f"Parameter {i} has {param_array.ndim} dimensions. Only 1D arrays are supported.")
+                param_arrays.append(param_array)
+                param_shapes.append(len(param_array))
+                param_is_array.append(True)
+        
+        # Determine output shape
+        array_shapes = [shape for shape, is_array in zip(param_shapes, param_is_array) if is_array]
+        if len(array_shapes) == 0:
+            # All parameters are scalars - original behavior
+            return self._solve_quasi_energies_single(params, T, Nt, hbar, rescale_omega, brillouin_omega)
+        
+        # Get matrix dimensions
+        N = self.H_time_indep.shape[0]
+        output_shape = tuple(array_shapes) + (N,)
+        
+        if self.verbose:
+            print(f"Computing quasi-energies for parameter grid with shape: {array_shapes}")
+            print(f"Output quasi-energies shape will be: {output_shape}")
+        
+        # Create parameter grids using meshgrid
+        array_params = [param_arrays[i] for i in range(len(params)) if param_is_array[i]]
+        if len(array_params) == 1:
+            # Single array parameter - no meshgrid needed
+            param_grid = array_params[0]
+            param_combinations = [(param_grid[i],) for i in range(len(param_grid))]
+        else:
+            # Multiple array parameters - use meshgrid
+            param_grids = np.meshgrid(*array_params, indexing='ij')
+            param_combinations = list(zip(*[grid.ravel() for grid in param_grids]))
+        
+        # Initialize result array
+        quasi_energies_result = np.zeros(output_shape)
+        
+        # Iterate over all parameter combinations
+        total_combinations = np.prod(array_shapes)
+        
+        if self.verbose:
+            print(f"Computing {total_combinations} parameter combinations...")
+        
+        for idx, param_combination in enumerate(param_combinations):
+            if self.verbose and (idx + 1) % max(1, total_combinations // 10) == 0:
+                print(f"Progress: {idx + 1}/{total_combinations} ({100*(idx+1)/total_combinations:.1f}%)")
+            
+            # Reconstruct full parameter list for this combination
+            full_params = []
+            array_idx = 0
+            for i, is_array in enumerate(param_is_array):
+                if is_array:
+                    full_params.append(param_combination[array_idx])
+                    array_idx += 1
+                else:
+                    full_params.append(param_arrays[i])
+            
+            # Compute quasi-energies for this parameter combination
+            quasi_energies_single = self._solve_quasi_energies_single(
+                full_params, T, Nt, hbar, rescale_omega, brillouin_omega, verbose=False
+            )
+            
+            # Store result in appropriate location
+            if len(array_shapes) == 1:
+                quasi_energies_result[idx] = quasi_energies_single
+            else:
+                # Convert flat index to multi-dimensional index
+                multi_idx = np.unravel_index(idx, array_shapes)
+                quasi_energies_result[multi_idx] = quasi_energies_single
+        
+        # Store results
+        self.quasi_energies = quasi_energies_result
+        
+        if self.verbose:
+            print(f"Computed quasi-energies with shape: {quasi_energies_result.shape}")
+        
+        return quasi_energies_result
+    
+    def _solve_quasi_energies_single(self, params, T, Nt=600, hbar=1, rescale_omega=None, brillouin_omega=None, verbose=None):
+        """
+        Internal method to compute quasi-energies for a single set of parameters.
+        """
+        if verbose is None:
+            verbose = self.verbose
+        
+        # Set up time array
+        dt = T / (Nt - 1)
+        t_array = dt * np.arange(Nt)
+        
+        # Get matrix dimensions
+        N = self.H_time_indep.shape[0]
+        
+        # Convert to dense arrays for efficient matrix operations
+        H0_dense = self.H_time_indep.toarray()
+        identity_N = np.eye(N, dtype=complex)
+        
+        # Pre-allocate temporary array
+        H_temp = np.zeros((N, N), dtype=complex)
+        
+        # Time evolution
+        U = identity_N.copy()
+        dt_over_hbar = dt / hbar
+        
+        for k in range(Nt):
+            t = t_array[k]
+            # Compute time-dependent Hamiltonian at time t
+            H_td = self.H_time_dep(*params, t)
+            
+            # Total Hamiltonian = H0 + H_time_dep(t)
+            if hasattr(H_td, 'toarray'):
+                H_td_dense = H_td.toarray()
+            else:
+                H_td_dense = H_td
+                
+            H_temp[:] = H0_dense + H_td_dense
+            U = expm(-1j * dt_over_hbar * H_temp) @ U
+        
+        # Compute Floquet Hamiltonian: HF = (i * hbar / T) * log[U]
+        HF = 1j * hbar / T * logm(U)
+        
+        # Diagonalize Floquet Hamiltonian
+        quasi_energies_raw, _ = np.linalg.eigh(HF)
+        quasi_energies_raw = quasi_energies_raw.real
+        
+        # Determine omega for Brillouin zone mapping
+        if brillouin_omega is not None:
+            omega = brillouin_omega
+        elif len(params) >= 2:
+            # Assume second parameter is omega (for backward compatibility)
+            omega = params[1]
+        else:
+            # Compute omega from period
+            omega = 2 * np.pi / T
+        
+        # Map to first Brillouin zone: [-ħω/2, +ħω/2]
+        brillouin_half_width = hbar * omega / 2
+        quasi_energies_BZ = ((quasi_energies_raw + brillouin_half_width) % (hbar * omega)) - brillouin_half_width
+        
+        # Apply rescaling if requested
+        if rescale_omega is not None:
+            rescale_factor = 1 / (hbar * rescale_omega)
+            quasi_energies_final = quasi_energies_BZ * rescale_factor
+        else:
+            # Use the same omega as for Brillouin zone mapping
+            rescale_factor = 1 / (hbar * omega)
+            quasi_energies_final = quasi_energies_BZ * rescale_factor
+        
+        # Sort quasi-energies
+        quasi_energies_final = np.sort(quasi_energies_final)
+        
+        return quasi_energies_final
+
     def solve(self, k):
         """
         Diagonalizes the Hamiltonian and reconstructs the physical-space wavefunctions
@@ -846,6 +1274,9 @@ class Hamiltonian:
         wavefunctions : list of ndarrays
             The reconstructed and normalized physical-space wavefunctions.
         """
+        if self.H_time_dep is not None:
+            raise ValueError("For time-dependent Hamiltonians, use solve_quasi_energies() instead.")
+            
         energies, eigvecs = eigsh(self.H, k=k, which="SM")
         if self.verbose:
                 print("Solved eigenvalue problem.")
@@ -974,8 +1405,6 @@ class Hamiltonian:
         self.densities = normalized_densities if self.mesh else None
 
         return self.energies, self.wavefunctions
-
-
 
     def plot(self, 
              wf_index:int =0, 
@@ -1147,10 +1576,4 @@ class Hamiltonian:
             fig.show()
 
         else:
-            raise ValueError("Mesh dimensionality must be 1, 2, or 3.") 
-
-
-
-
-
-
+            raise ValueError("Mesh dimensionality must be 1, 2, or 3.")
