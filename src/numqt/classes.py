@@ -1147,7 +1147,6 @@ class Hamiltonian:
             *params, period_val = self.time_dep_args
             param_arrays = [np.atleast_1d(p) for p in params]
             
-<<<<<<< HEAD
             # Find dimensions of sweeps
             sweep_dims = [p.shape for p in param_arrays if p.ndim > 0]
             if not sweep_dims: # all scalars
@@ -1204,51 +1203,8 @@ class Hamiltonian:
             return np.sort(quasi_energies_final)
             
         return np.sort(quasi_energies_BZ)
-=======
-            # Total Hamiltonian = H0 + H_time_dep(t)
-            if hasattr(H_td, 'toarray'):
-                H_td_dense = H_td.toarray()
-            else:
-                H_td_dense = H_td
-                
-            H_temp[:] = H0_dense + H_td_dense
-            U = expm(-1j * dt_over_hbar * H_temp) @ U
-        
-        # Compute Floquet Hamiltonian: HF = (i * hbar / T) * log[U]
-        #HF = 1j * hbar / T * logm(U)
-        
-        # Diagonalize Floquet Hamiltonian
-        eigenvalues, _ = np.linalg.eigh(U)
-        quasi_energies_raw = (hbar / T) * np.angle(eigenvalues) 
-        
-        # Determine omega for Brillouin zone mapping
-        if brillouin_omega is not None:
-            omega = brillouin_omega
-        elif len(params) >= 2:
-            # Assume second parameter is omega (for backward compatibility)
-            omega = params[1]
-        else:
-            # Compute omega from period
-            omega = 2 * np.pi / T
-        
-        # Map to first Brillouin zone: [-ħω/2, +ħω/2]
-        brillouin_half_width = hbar * omega / 2
-        quasi_energies_BZ = ((quasi_energies_raw + brillouin_half_width) % (hbar * omega)) - brillouin_half_width
-        
-        # Apply rescaling if requested
-        if rescale_omega is not None:
-            rescale_factor = 1 / (hbar * rescale_omega)
-            quasi_energies_final = quasi_energies_BZ * rescale_factor
-        else:
-            # Use the same omega as for Brillouin zone mapping
-            rescale_factor = 1 / (hbar * omega)
-            quasi_energies_final = quasi_energies_BZ * rescale_factor
-        
-        # Sort quasi-energies
-        quasi_energies_final = np.sort(quasi_energies_final)
-        
-        return quasi_energies_final
->>>>>>> fff1ec8f15090ba4e396abf6af585d41ec018fff
+
+    
 
     def solve(self, k):
         """
