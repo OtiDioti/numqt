@@ -1042,13 +1042,13 @@ class Hamiltonian:
             if hasattr(H_td, 'toarray') and False: # this will never run!!!!!!!!!!
                 H_td_dense = H_td.toarray()
             else:
-                H_td_dense = H_td
+                H_td_dense = H_td.tocsc()
                 
             H_temp = H0_dense + H_td_dense
             U = expm(-1j * dt_over_hbar * H_temp) @ U
         
         # Compute Floquet Hamiltonian: HF = (i * hbar / period) * log[U]
-        HF = 1j * hbar / period * logm(U)
+        HF = 1j * hbar / period * logm(U.toarray())
         
         # Diagonalize Floquet Hamiltonian
         quasi_energies_raw, _ = np.linalg.eigh(HF)
