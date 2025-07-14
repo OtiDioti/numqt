@@ -1054,8 +1054,8 @@ class Hamiltonian:
         #HF = 1j * hbar / period * logm(U)
         
         # Diagonalize Floquet Hamiltonian
-        quasi_energies_raw, _ = np.linalg.eig(U)
-        quasi_energies_raw = quasi_energies_raw.real
+        eigenvalues, _ = np.linalg.eigh(U)
+        quasi_energies_raw = (hbar / T) * np.angle(eigenvalues) 
         
         # Determine omega for Brillouin zone mapping
         if brillouin_omega is not None:
@@ -1220,8 +1220,8 @@ class Hamiltonian:
         #HF = 1j * hbar / T * logm(U)
         
         # Diagonalize Floquet Hamiltonian
-        quasi_energies_raw, _ = np.linalg.eigh(U)
-        quasi_energies_raw = quasi_energies_raw.real
+        eigenvalues, _ = np.linalg.eig(U)
+        quasi_energies_raw = (hbar / T) * np.angle(eigenvalues) 
         
         # Determine omega for Brillouin zone mapping
         if brillouin_omega is not None:
