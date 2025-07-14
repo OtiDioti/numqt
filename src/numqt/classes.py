@@ -5,8 +5,8 @@ from scipy.sparse import diags, eye, kron, coo_matrix, isspmatrix_csr, isspmatri
 from .utils import iterative_kron
 from skimage import measure
 import plotly.graph_objects as go
-from scipy.sparse.linalg import eigsh, expm
-from scipy.linalg import logm
+#from scipy.sparse.linalg import eigsh, expm, logm
+from scipy.linalg import expm, logm
 from mpl_toolkits.mplot3d import Axes3D
 from scipy.integrate import quad
 from scipy.sparse import lil_matrix, csr_matrix
@@ -1026,8 +1026,11 @@ class Hamiltonian:
         N = self.H_time_indep.shape[0]
         
         # Convert to dense arrays for efficient matrix operations
-        H0_dense = self.H_time_indep# had.toarray()!!!!!!!!!!!
-        identity_N = eye(N, dtype=complex) #was np.eye!!!!!!!!!!!!
+        H0_dense = self.H_time_indep.toarray()
+        identity_N = np.eye(N, dtype=complex)
+        
+        # Pre-allocate temporary array
+        H_temp = np.zeros((N, N), dtype=complex)
         
         # Time evolution
         U = identity_N.copy()
@@ -1039,16 +1042,16 @@ class Hamiltonian:
             H_td = self.H_time_dep(amplitude, frequency, t)
             
             # Total Hamiltonian = H0 + H_time_dep(t)
-            if hasattr(H_td, 'toarray') and False: # this will never run!!!!!!!!!!
+            if hasattr(H_td, 'toarray'):
                 H_td_dense = H_td.toarray()
             else:
                 H_td_dense = H_td
                 
-            H_temp = H0_dense + H_td_dense
-            U = expm(-1j * dt_over_hbar * H_temp.tocsc()) @ U
+            H_temp[:] = H0_dense + H_td_dense
+            U = expm(-1j * dt_over_hbar * H_temp) @ U
         
         # Compute Floquet Hamiltonian: HF = (i * hbar / period) * log[U]
-        HF = 1j * hbar / period * logm(U.toarray())
+        HF = 1j * hbar / period * logm(U)
         
         # Diagonalize Floquet Hamiltonian
         quasi_energies_raw, _ = np.linalg.eigh(HF)
