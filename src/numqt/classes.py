@@ -1029,9 +1029,6 @@ class Hamiltonian:
         H0_dense = self.H_time_indep# had.toarray()!!!!!!!!!!!
         identity_N = eye(N, dtype=complex) #was np.eye!!!!!!!!!!!!
         
-        # Pre-allocate temporary array
-        H_temp = np.zeros((N, N), dtype=complex)
-        
         # Time evolution
         U = identity_N.copy()
         dt_over_hbar = dt / hbar
@@ -1047,7 +1044,7 @@ class Hamiltonian:
             else:
                 H_td_dense = H_td
                 
-            H_temp[:] = H0_dense + H_td_dense
+            H_temp = H0_dense + H_td_dense
             U = expm(-1j * dt_over_hbar * H_temp) @ U
         
         # Compute Floquet Hamiltonian: HF = (i * hbar / period) * log[U]
