@@ -1217,10 +1217,10 @@ class Hamiltonian:
             U = expm(-1j * dt_over_hbar * H_temp) @ U
         
         # Compute Floquet Hamiltonian: HF = (i * hbar / T) * log[U]
-        HF = 1j * hbar / T * logm(U)
+        #HF = 1j * hbar / T * logm(U)
         
         # Diagonalize Floquet Hamiltonian
-        quasi_energies_raw, _ = np.linalg.eigh(HF)
+        quasi_energies_raw, _ = np.linalg.eigh(U)
         quasi_energies_raw = quasi_energies_raw.real
         
         # Determine omega for Brillouin zone mapping
