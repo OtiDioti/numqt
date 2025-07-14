@@ -1,16 +1,16 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import sparse
-from scipy.sparse import diags, eye, kron, coo_matrix, isspmatrix_csr, isspmatrix_csc
+from scipy.sparse import diags, eye, kron, coo_matrix, isspmatrix_csr, isspmatrix_csc, csr_matrix, lil_matrix, isspmatrix_csr, isspmatrix_csc
 from .utils import iterative_kron
 from skimage import measure
 import plotly.graph_objects as go
-from scipy.sparse.linalg import eigsh
+from scipy.sparse.linalg import eigsh, expm, logm
+#from scipy.linalg import expm, logm
 from mpl_toolkits.mplot3d import Axes3D
 from scipy.integrate import quad
 from scipy.sparse import lil_matrix, csr_matrix
 from concurrent.futures import ThreadPoolExecutor
-
         
 class Mesh:
     def __init__(self, 
@@ -662,18 +662,13 @@ class canonic_ops:
 
 
 
-
 # ----------------------------------------------------------
 # ----------------------------------------------------------
 # Hamiltonian
 # ----------------------------------------------------------
 # ----------------------------------------------------------
 
-import numpy as np
-from scipy.sparse.linalg import eigsh
-from scipy.sparse import csr_matrix, lil_matrix, isspmatrix_csr, isspmatrix_csc
-from scipy.linalg import expm, logm
-import matplotlib.pyplot as plt
+
 
 class Hamiltonian:
     def __init__(self, H=None, H_time_indep=None, H_time_dep=None, time_dep_args=None, 
