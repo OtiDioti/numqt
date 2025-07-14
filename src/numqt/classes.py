@@ -5,7 +5,7 @@ from scipy.sparse import diags, eye, kron, coo_matrix, isspmatrix_csr, isspmatri
 from .utils import iterative_kron
 from skimage import measure
 import plotly.graph_objects as go
-from scipy.sparse.linalg import eigsh, expm, logm
+from scipy.sparse.linalg import eigsh, expm
 from scipy.linalg import logm
 from mpl_toolkits.mplot3d import Axes3D
 from scipy.integrate import quad
