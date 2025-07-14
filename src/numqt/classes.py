@@ -1026,8 +1026,8 @@ class Hamiltonian:
         N = self.H_time_indep.shape[0]
         
         # Convert to dense arrays for efficient matrix operations
-        H0_dense = self.H_time_indep.toarray()
-        identity_N = np.eye(N, dtype=complex)
+        H0_dense = self.H_time_indep# had.toarray()!!!!!!!!!!!
+        identity_N = eye(N, dtype=complex) #was np.eye!!!!!!!!!!!!
         
         # Pre-allocate temporary array
         H_temp = np.zeros((N, N), dtype=complex)
@@ -1042,7 +1042,7 @@ class Hamiltonian:
             H_td = self.H_time_dep(amplitude, frequency, t)
             
             # Total Hamiltonian = H0 + H_time_dep(t)
-            if hasattr(H_td, 'toarray'):
+            if hasattr(H_td, 'toarray') and False: # this will never run!!!!!!!!!!
                 H_td_dense = H_td.toarray()
             else:
                 H_td_dense = H_td
