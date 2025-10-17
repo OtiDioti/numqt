@@ -5,4 +5,4 @@ from .spin_ops import *
 from .bos_ops import *
 from .fd_ops import *
 
-__version__ = "0.0.1"
+__version__ = "0.1.0"
