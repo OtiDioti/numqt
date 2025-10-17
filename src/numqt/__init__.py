@@ -3,5 +3,6 @@ from .classes import *
 from .utils import *
 from .spin_ops import *
 from .bos_ops import *
+from .fd_ops import *
 
 __version__ = "0.0.1"
