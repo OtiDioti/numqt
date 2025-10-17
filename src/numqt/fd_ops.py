@@ -1,35 +1,16 @@
 from scipy.sparse import eye as sp_eye, diags, kron, csr_matrix
 from numpy import sqrt, arange, arctan, cos, sin, complex128, pi
+from .bos_ops import bos_ops
 
 def fock_darwin_ops(dim_plus, dim_minus, other_dims=None):
     """Returns the Fock-Darwin bosonic operators a+, a+†, a-, a-†"""
-    diag_plus = sqrt(arange(1, dim_plus))
-    a_plus = diags(diag_plus, 1, shape=(dim_plus, dim_plus), format='csr')
-    ad_plus = diags(diag_plus, -1, shape=(dim_plus, dim_plus), format='csr')
-    
-    diag_minus = sqrt(arange(1, dim_minus))
-    a_minus = diags(diag_minus, 1, shape=(dim_minus, dim_minus), format='csr')
-    ad_minus = diags(diag_minus, -1, shape=(dim_minus, dim_minus), format='csr')
-    
-    id_plus = sp_eye(dim_plus, format='csr')
-    id_minus = sp_eye(dim_minus, format='csr')
-    
-    a_plus_full = kron(a_plus, id_minus)
-    ad_plus_full = kron(ad_plus, id_minus)
-    a_minus_full = kron(id_plus, a_minus)
-    ad_minus_full = kron(id_plus, ad_minus)
-    
-    if other_dims is not None:
-        for dim in reversed(other_dims):
-            id_op = sp_eye(dim, format='csr')
-            a_plus_full = kron(id_op, a_plus_full)
-            ad_plus_full = kron(id_op, ad_plus_full)
-            a_minus_full = kron(id_op, a_minus_full)
-            ad_minus_full = kron(id_op, ad_minus_full)
-    
+    bosonic_ops = bos_ops(dimx=dim_plus, dimy=dim_minus, other_dims=other_dims) # Obtaining bosonic operators
+    a_plus, ad_plus = bosonic_ops["x"] # Extracting bosonic operators
+    a_minus, ad_minus = bosonic_ops["y"] # Extracting bosonic operators
+
     return {
-        'plus': [a_plus_full, ad_plus_full],
-        'minus': [a_minus_full, ad_minus_full]
+        'plus': [a_plus, ad_plus],
+        'minus': [a_minus, ad_minus]
     }
 
 
