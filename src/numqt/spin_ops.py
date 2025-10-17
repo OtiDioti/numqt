@@ -92,18 +92,18 @@ def spin12(dimx: int = None, dimy: int = None, dimz: int = None, hbar=1):
         The spin-1/2 operators (and their squares) acting on the full tensor product space.
     """
     # Pauli matrices (times hbar/2)
-    Sx = (hbar/2) * np.array([[0, 1],
-                              [1, 0]], dtype=complex)
-    Sy = (hbar/2) * np.array([[0, -1j],
-                              [1j, 0]], dtype=complex)
-    Sz = (hbar/2) * np.array([[1, 0],
-                              [0, -1]], dtype=complex)
+    Sx = np.array([[0, 1],
+                   [1, 0]], dtype=complex)
+    Sy = np.array([[0, -1j],
+                   [1j, 0]], dtype=complex)
+    Sz = np.array([[1, 0],
+                   [0, -1]], dtype=complex)
     S0 = np.eye(2, dtype=complex)
 
     # For spin-1/2, note that Sx^2 = Sy^2 = Sz^2 = (hbar/2)^2 I.
-    Sx2 = (hbar/2)**2 * np.eye(2, dtype=complex)
-    Sy2 = (hbar/2)**2 * np.eye(2, dtype=complex)
-    Sz2 = (hbar/2)**2 * np.eye(2, dtype=complex)
+    Sx2 = np.eye(2, dtype=complex)
+    Sy2 = np.eye(2, dtype=complex)
+    Sz2 = np.eye(2, dtype=complex)
 
     extra_ops = []
     for d in [dimx, dimy, dimz]:
