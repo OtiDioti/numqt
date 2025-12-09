@@ -27,7 +27,7 @@ def calculate_anisotropic_frequencies(omega_x, omega_y, omega_c):
     if abs(omega_dif) < 1e-15:
         theta = pi / 4
     else:
-        theta = 0.5 * arctan(omega_c * sqrt(omega_c**2 + 2*omega_sum)) / (omega_dif) # SHOULD THIS BE 0.5 * arctan((omega_c * sqrt(omega_c**2 + 2*omega_sum)) / omega_dif) INSTEAD?
+        theta = 0.5 * arctan(omega_c * sqrt(omega_c**2 + 2*omega_sum) / omega_dif)
     
     return omega_plus, omega_minus, theta
 
