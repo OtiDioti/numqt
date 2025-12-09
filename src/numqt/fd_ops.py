@@ -2,9 +2,9 @@ from scipy.sparse import eye as sp_eye, diags, kron, csr_matrix
 from numpy import sqrt, arange, arctan, cos, sin, complex128, pi
 from .bos_ops import bos_ops
 
-def fock_darwin_ops(dim_plus, dim_minus, other_dims=None):
+def fock_darwin_ops(dim_plus, dim_minus, dim_z, other_dims=None):
     """Returns the Fock-Darwin bosonic operators a+, a+†, a-, a-†"""
-    bosonic_ops = bos_ops(dimx=dim_plus, dimy=dim_minus, other_dims=other_dims) # Obtaining bosonic operators
+    bosonic_ops = bos_ops(dimx=dim_plus, dimy=dim_minus, dimz=dim_z, other_dims=other_dims) # Obtaining bosonic operators
     a_plus, ad_plus = bosonic_ops["x"] # Extracting bosonic operators
     a_minus, ad_minus = bosonic_ops["y"] # Extracting bosonic operators
 
